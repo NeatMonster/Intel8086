@@ -1,9 +1,5 @@
 package fr.neatmonster.intel8086;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-
 /**
  * The 8086 CPU is characterized by:
  * - a standard operating speed of 5 MHz (200 ns a cycle time).
@@ -46,23 +42,6 @@ import java.nio.file.Paths;
  * cycle before honoring the EU's request.
  */
 public class Intel8086 {
-    /**
-     * Entry point.
-     */
-    public static void main(final String[] args) {
-        // Instantiate a new CPU.
-        final Intel8086 cpu = new Intel8086();
-        try {
-            // Try loading test file.
-            cpu.load(Files.readAllBytes(Paths.get("test_add")));
-            // Execute all instructions.
-            while (cpu.cycle())
-                ++cpu.ip; // Next instruction
-        } catch (final IOException e) {
-            e.printStackTrace();
-        }
-    }
-
     /**
      * CF (carry flag)
      *
@@ -505,6 +484,25 @@ public class Intel8086 {
      */
     private final int[]      memory = new int[1048576];
 
+    /*
+     * Typical 8086 Machine Instruction Format
+     *
+     * |     BYTE 1     |     BYTE 2      |     BYTE 3    |     BYTE 4     |  BYTE 5  |  BYTE 6   |
+     * | OPCODE | D | W | MOD | REG | R/M | LOW DISP/DATA | HIGH DISP/DATA | LOW DATA | HIGH DATA |
+     */
+    /** Operation (Instruction) code */
+    private int              op;
+    /** Direction is to register/Direction is from register */
+    private int              d;
+    /** Word/Byte operation */
+    private int              w;
+    /** Register mode/Memory mode with displacement length */
+    private int              mod;
+    /** Register operand/Extension of opcode */
+    private int              reg;
+    /** Register operand/Registers to use in EA calculation */
+    private int              rm;
+
     /**
      * Perform addition and set flags accordingly.
      *
@@ -550,28 +548,100 @@ public class Intel8086 {
         for (int i = 0; i < 6; i++)
             queue[i] = memory[ip + i];
 
-        /*
-         * Typical 8086 Machine Instruction Format
-         *
-         * |     BYTE 1     |     BYTE 2      |     BYTE 3    |     BYTE 4     |  BYTE 5  |  BYTE 6   |
-         * | OPCODE | D | W | MOD | REG | R/M | LOW DISP/DATA | HIGH DISP/DATA | LOW DATA | HIGH DATA |
-         *     ^      ^   ^    ^     ^     ^
-         *     |      |   |    |     |     |--- REGISTER OPERAND/REGISTERS TO USE IN EA CALCULATION
-         *     |      |   |    |     |--------- REGISTER OPERAND/EXTENSION OF OPCODE
-         *     |      |   |    |--------------- REGISTER MODE/MEMORY MODE WITH DISPLACEMENT LENGTH
-         *     |      |   |-------------------- WORD/BYTE OPERATION
-         *     |      |------------------------ DIRECTION IS TO REGISTER/DIRECTION IS FROM REGISTER
-         *     |------------------------------- OPERATION (INSTRUCTION) CODE
-         */
-        final int op = queue[0] >>> 2 & 0b111111;
-        final int d = queue[0] >>> 1 & 0b1;
-        final int w = queue[0] & 0b1;
-        final int mod = queue[1] >>> 6 & 0b11;
-        final int reg = queue[1] >>> 3 & 0b111;
-        final int rm = queue[1] & 0b111;
+        // Decode first byte.
+        op = queue[0] >>> 2 & 0b111111;
+        d = queue[0] >>> 1 & 0b1;
+        w = queue[0] & 0b1;
 
-        int dst, src, res = 0;
+        int dst, src, res = 0, addr;
         switch (queue[0]) {
+        /*
+         * MOV destination,source
+         *
+         * MOV transfers a byte or a word from the source operand to the
+         * destination operand.
+         */
+        // Register/Memory to/from Register
+        case 0x88: // MOV REG8/MEM8,REG8
+        case 0x89: // MOV REG16/MEM16,REG16
+            decode();
+            setRM(w, mod, rm, getReg(w, reg));
+            break;
+        case 0x8a: // MOV REG8,REG8/MEM8
+        case 0x8b: // MOV REG16,REG16/MEM16
+            decode();
+            setReg(w, reg, getRM(w, mod, rm));
+            break;
+
+        // Immediate to Register/Memory
+        case 0xc6: // MOV REG8/MEM8,IMMED8
+        case 0xc7: // MOV REG16/MEM16,IMMED16
+            decode();
+            src = memory[++ip];
+            if (w == 0b1)
+                src |= memory[++ip] << 8;
+            setRM(w, mod, rm, src);
+            break;
+
+        // Immediate to Register
+        case 0xb0: // MOV AL,IMMED8
+        case 0xb1: // MOV CL,IMMED8
+        case 0xb2: // MOV DL,IMMED8
+        case 0xb3: // MOV BL,IMMED8
+        case 0xb4: // MOV AH,IMMED8
+        case 0xb5: // MOV CH,IMMED8
+        case 0xb6: // MOV DH,IMMED8
+        case 0xb7: // MOV BH,IMMED8
+        case 0xb8: // MOV AX,IMMED16
+        case 0xb9: // MOV CX,IMMED16
+        case 0xba: // MOV DX,IMMED16
+        case 0xbb: // MOV BX,IMMED16
+        case 0xbc: // MOV SP,IMMED16
+        case 0xbd: // MOV BP,IMMED16
+        case 0xbe: // MOV SI,IMMED16
+        case 0xbf: // MOV DI,IMMED16
+            w = queue[0] >> 3 & 0b1;
+            reg = queue[0] & 0b111;
+            src = memory[++ip];
+            if (w == 0b1)
+                src |= memory[++ip] << 8;
+            setReg(w, reg, src);
+            break;
+
+        // Memory to Accumulator
+        case 0xa0: // MOV AL,MEM8
+        case 0xa1: // MOV AX,MEM16
+            addr = memory[++ip];
+            addr |= memory[++ip] << 8;
+            src = memory[addr];
+            if (w == 0b1)
+                src |= memory[addr + 1] << 8;
+            setReg(w, 0, src);
+            break;
+
+        // Accumulator to Memory
+        case 0xa2: // MOV MEM8,AL
+        case 0xa3: // MOV MEM16,AX
+            addr = memory[++ip];
+            addr |= memory[++ip] << 8;
+            src = getReg(w, 0);
+            memory[addr] = src & 0xff;
+            if (w == 0b1)
+                memory[addr + 1] = src >>> 8 & 0xff;
+            break;
+
+        // Register/Memory to Segment Register
+        case 0x8e: // MOV SEGREG,REG16/MEM16
+            decode();
+            setSegReg(reg, getRM(0b1, mod, rm));
+            break;
+
+        // Segment Register to Register/Memory
+        case 0x8c: // MOV REG16/MEM16,SEGREG
+            decode();
+            setRM(0b1, mod, rm, getSegReg(reg));
+            break;
+  
         /*
          * ADD destination,source
          *
@@ -579,56 +649,87 @@ public class Intel8086 {
          * the destination operand. Both operands may be signed or unsigned
          * binary numbers. ADD updates AF, CF, OF, PF, SF and ZF.
          */
+        // Reg./Memory and Register to Either
         case 0x00: // ADD REG8/MEM8,REG8
         case 0x01: // ADD REG16/MEM16,REG16
-            ++ip;
+            decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
             res = add(w, dst, src);
             setRM(w, mod, rm, res);
             break;
-
         case 0x02: // ADD REG8,REG8/MEM8
         case 0x03: // ADD REG16,REG16/MEM16
-            ++ip;
+            decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
             res = add(w, dst, src);
             setReg(w, reg, res);
             break;
 
+        // Immediate to Accumulator
+        case 0x04: // ADD AL,IMMED8
+        case 0x05: // ADD AX,IMMED16
+            dst = getReg(w, 0);
+            src = memory[++ip];
+            if (w == 0b1)
+                src |= memory[++ip] << 8;
+            res = add(w, dst, src);
+            setReg(w, 0, res);
+            break;
+
         case 0x80:
+            // ADD REG8/MEM8,IMMED8
         case 0x81:
+            // ADD REG16/MEM16,IMMED16
         case 0x82:
+            // ADD REG8/MEM8,IMMED8
         case 0x83:
-            ++ip;
+            // ADD REG16/MEM16,IMMED8
+            decode();
             dst = getRM(w, mod, rm);
             src = memory[++ip];
             if (queue[0] == 0x81)
                 src |= memory[++ip] << 8;
             switch (reg) {
             case 0b000:
-                // ADD REG8/MEM8,IMMED8
-                // ADD REG16/MEM16,IMMED16
                 res = add(w, dst, src);
+                break;
             }
             setRM(w, mod, rm, res);
-            break;
-
-        case 0x04: // ADD AL,IMMED8
-        case 0x05: // ADD AX,IMMED16
-            dst = getReg(w, 0);
-            src = memory[++ip];
-            if (queue[0] == 0x05)
-                src |= memory[++ip] << 8;
-            res = add(w, dst, src);
-            setReg(w, 0, res);
             break;
 
         case 0xc3:
             return false;
         }
         return true;
+    }
+
+    /**
+     * Decodes the second byte of the instruction and increments IP accordingly.
+     */
+    private void decode() {
+        mod = queue[1] >>> 6 & 0b11;
+        reg = queue[1] >>> 3 & 0b111;
+        rm = queue[1] & 0b111;
+
+        if (mod == 0b01)
+            // 8-bit displacement follows
+            ip += 2;
+        else if (mod == 0b00 && rm == 0b110 || mod == 0b10)
+            // 16-bit displacement follows
+            ip += 3;
+        else
+            // No displacement
+            ip += 1;
+    }
+
+    /**
+     * Execute all instructions.
+     */
+    public void execute() {
+        while (cycle())
+            ++ip; // Next instruction
     }
 
     /**
@@ -764,22 +865,16 @@ public class Intel8086 {
      *            the mode field
      * @param rm
      *            the register/memory field
-     * @param inc
-     *            increment the instruction pointer?
      * @return the effective address
      */
-    private int getEA(final int mod, final int rm, final boolean inc) {
-        // No displacement
+    private int getEA(final int mod, final int rm) {
         int disp = 0;
-        if (mod == 0b01) {
+        if (mod == 0b01)
             // 8-bit displacement follows
-            ip += inc ? 1 : 0;
             disp = queue[2];
-        } else if (mod == 0b10) {
+        else if (mod == 0b10)
             // 16-bit displacement follows
-            ip += inc ? 2 : 0;
             disp = queue[3] << 8 | queue[2];
-        }
 
         switch (rm) {
         case 0b000: // EA = (BX) + (SI) + DISP
@@ -797,7 +892,6 @@ public class Intel8086 {
         case 0b110:
             if (mod == 0b00) {
                 // Direct address
-                ip += inc ? 2 : 0;
                 return queue[3] << 8 | queue[2];
             } else
                 // EA = (BP) + DISP
@@ -890,7 +984,7 @@ public class Intel8086 {
             return getReg(w, rm);
         else {
             // Memory mode
-            final int ea = getEA(mod, rm, true);
+            final int ea = getEA(mod, rm);
             if (w == 0b0)
                 // Byte data
                 return memory[ea];
@@ -901,14 +995,54 @@ public class Intel8086 {
     }
 
     /**
-     * Loads a binary file into memory.
+     * Gets the value of the segment register.
      *
+     * The REG (register) field identifies a register that is one of the
+     * instruction operands.
+     *
+     * @param reg
+     *            the register field
+     * @return the value
+     */
+    private int getSegReg(final int reg) {
+        switch (reg) {
+        case 0b00:
+            return es;
+        case 0b01:
+            return cs;
+        case 0b10:
+            return ss;
+        case 0b11:
+            return ds;
+        }
+        return 0;
+    }
+
+    /**
+     * Loads a binary file into memory at the specified address.
+     *
+     * @param addr
+     *            the address
      * @param bin
      *            the binary file
      */
-    public void load(final byte[] bin) {
+    public void load(final int addr, final int[] bin) {
         for (int i = 0; i < bin.length; i++)
-            memory[i] = bin[i] & 0xff;
+            memory[addr + i] = bin[i] & 0xff;
+    }
+
+    /**
+     * Resets the CPU to its default state.
+     */
+    public void reset() {
+        flags = 0;
+        ip = 0x0000;
+        cs = 0xffff;
+        ds = 0x0000;
+        ss = 0x0000;
+        es = 0x0000;
+        for (int i = 0; i < 6; i++)
+            queue[i] = 0;
     }
 
     /**
@@ -1018,7 +1152,7 @@ public class Intel8086 {
             setReg(w, rm, val);
         else {
             // Memory mode
-            final int ea = getEA(mod, rm, false);
+            final int ea = getEA(mod, rm);
             if (w == 0b0)
                 // Byte data
                 memory[ea] = val & 0xff;
@@ -1027,6 +1161,34 @@ public class Intel8086 {
                 memory[ea] = val & 0xff;
                 memory[ea + 1] = val >>> 8 & 0xff;
             }
+        }
+    }
+
+    /**
+     * Sets the value of the segment register.
+     *
+     * The REG (register) field identifies a register that is one of the
+     * instruction operands.
+     *
+     * @param reg
+     *            the register field
+     * @param val
+     *            the new value
+     */
+    private void setSegReg(final int reg, final int val) {
+        switch (reg) {
+        case 0b00:
+            es = val & 0xffff;
+            break;
+        case 0b01:
+            cs = val & 0xffff;
+            break;
+        case 0b10:
+            ss = val & 0xffff;
+            break;
+        case 0b11:
+            ds = val & 0xffff;
+            break;
         }
     }
 }
