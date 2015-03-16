@@ -54,9 +54,10 @@ public class Intel8086 {
         final Intel8086 cpu = new Intel8086();
         try {
             // Try loading test file.
-            cpu.load(Files.readAllBytes(Paths.get("test0")));
+            cpu.load(Files.readAllBytes(Paths.get("test_add")));
             // Execute all instructions.
-            while (cpu.cycle()) {}
+            while (cpu.cycle())
+                ++cpu.ip; // Next instruction
         } catch (final IOException e) {
             e.printStackTrace();
         }
@@ -251,8 +252,8 @@ public class Intel8086 {
      * When register BP, the pointer register, is designated as a base register
      * register in an instruction, the variable is assumed to reside in the
      * current stack segment. Register BP thus provides a convenient way to
-     * address data on the stack; BP can be sued, however, to access data in any
-     * of the other currently addressable segments.
+     * address data on the stack; BP can be sued, however, to access data in
+     * any of the other currently addressable segments.
      */
     private int              bp;
 
@@ -489,8 +490,8 @@ public class Intel8086 {
      * segments (the only exception is the destination operand of a string
      * instruction which must be in the extra segment). This is done by
      * preceding an instruction with a segment override prefix. This one-byte
-     * machine instruction tells the BIU which segment register to use to access
-     * a variable referenced in the following instruction.
+     * machine instruction tells the BIU which segment register to use to
+     * access a variable referenced in the following instruction.
      *
      * Dedicated and Reserved Memory Locations
      *
@@ -506,7 +507,7 @@ public class Intel8086 {
 
     /**
      * Perform addition and set flags accordingly.
-     * 
+     *
      * @param w
      *            word/byte operation
      * @param dst
@@ -555,14 +556,13 @@ public class Intel8086 {
          * |     BYTE 1     |     BYTE 2      |     BYTE 3    |     BYTE 4     |  BYTE 5  |  BYTE 6   |
          * | OPCODE | D | W | MOD | REG | R/M | LOW DISP/DATA | HIGH DISP/DATA | LOW DATA | HIGH DATA |
          *     ^      ^   ^    ^     ^     ^
-         *     |      |   |    |     |     |--- REGISTER OPERAND/REGISTERS TO USE IN EA CACULATION
+         *     |      |   |    |     |     |--- REGISTER OPERAND/REGISTERS TO USE IN EA CALCULATION
          *     |      |   |    |     |--------- REGISTER OPERAND/EXTENSION OF OPCODE
          *     |      |   |    |--------------- REGISTER MODE/MEMORY MODE WITH DISPLACEMENT LENGTH
          *     |      |   |-------------------- WORD/BYTE OPERATION
          *     |      |------------------------ DIRECTION IS TO REGISTER/DIRECTION IS FROM REGISTER
          *     |------------------------------- OPERATION (INSTRUCTION) CODE
          */
-        ++ip;
         final int op = queue[0] >>> 2 & 0b111111;
         final int d = queue[0] >>> 1 & 0b1;
         final int w = queue[0] & 0b1;
@@ -570,7 +570,7 @@ public class Intel8086 {
         final int reg = queue[1] >>> 3 & 0b111;
         final int rm = queue[1] & 0b111;
 
-        int dst, src, res;
+        int dst, src, res = 0;
         switch (queue[0]) {
         /*
          * ADD destination,source
@@ -595,6 +595,34 @@ public class Intel8086 {
             src = getRM(w, mod, rm);
             res = add(w, dst, src);
             setReg(w, reg, res);
+            break;
+
+        case 0x80:
+        case 0x81:
+        case 0x82:
+        case 0x83:
+            ++ip;
+            dst = getRM(w, mod, rm);
+            src = memory[++ip];
+            if (queue[0] == 0x81)
+                src |= memory[++ip] << 8;
+            switch (reg) {
+            case 0b000:
+                // ADD REG8/MEM8,IMMED8
+                // ADD REG16/MEM16,IMMED16
+                res = add(w, dst, src);
+            }
+            setRM(w, mod, rm, res);
+            break;
+
+        case 0x04: // ADD AL,IMMED8
+        case 0x05: // ADD AX,IMMED16
+            dst = getReg(w, 0);
+            src = memory[++ip];
+            if (queue[0] == 0x05)
+                src |= memory[++ip] << 8;
+            res = add(w, dst, src);
+            setReg(w, 0, res);
             break;
 
         case 0xc3:
@@ -793,7 +821,7 @@ public class Intel8086 {
      * @return the value
      */
     private int getReg(final int w, final int reg) {
-        if (w == 0b0) 
+        if (w == 0b0)
             // Byte data
             switch (reg) {
             case 0b000: // AL
@@ -931,7 +959,7 @@ public class Intel8086 {
             case 0b000: { // AX
                 al = val & 0xff;
                 ah = val >>> 8 & 0xff;
-            break;
+                break;
             }
             case 0b001: { // CX
                 cl = val & 0xff;
