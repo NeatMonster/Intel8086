@@ -530,7 +530,7 @@ public class Intel8086 {
             flags &= ~ZF;
 
         // Sign Flag
-        if (w == 0b0 && (res >> 7 & 0b1) == 1 || w == 0b1 && (res >> 15 & 0b1) == 1)
+        if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
             flags |= SF;
         else
             flags &= ~SF;
@@ -704,6 +704,41 @@ public class Intel8086 {
         case 0x1f: // POP DS
             reg = queue[0] >>> 3 & 0b111;
             setSegReg(reg, pop());
+            break;
+ 
+        /*
+         * XCHG destination,source
+         *
+         * XCHG (exchange) switches the contents of the source and destination
+         * (byte or word) operands. When used in conjunction with the LOCK
+         * prefix, XCHG can test and set a semaphore that controls access to a
+         * resource shared by multiple processors.
+         */
+        // Register/Memory with Register
+        case 0x86: // XCHG REG8,REG8/MEM8
+        case 0x87: // XCHG REG16,REG16/MEM16
+            decode();
+            dst = getReg(w, reg);
+            src = getRM(w, mod, rm);
+            setReg(w, reg, src);
+            setRM(w, mod, rm, dst);
+            break;
+
+        // Register with Accumulator
+        case 0x90: // NOP
+            break;
+        case 0x91: // XCHG AX,CX
+        case 0x92: // XCHG AX,DX
+        case 0x93: // XCHG AX,BX
+        case 0x94: // XCHG AX,SP
+        case 0x95: // XCHG AX,BP
+        case 0x96: // XCHG AX,SI
+        case 0x97: // XCHG AX,DI
+            reg = queue[0] & 0b111;
+            dst = getReg(0b1, 0b000);
+            src = getReg(0b1, reg);
+            setReg(0b1, 0b000, src);
+            setReg(0b1, reg, dst);
             break;
 
         /*

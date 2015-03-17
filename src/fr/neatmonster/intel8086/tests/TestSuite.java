@@ -9,7 +9,8 @@ import org.junit.runners.Suite;
     TestAdd.class,
     TestMov.class,
     TestPop.class,
-    TestPush.class
+    TestPush.class,
+    TestXchg.class
 })
 public class TestSuite {
     

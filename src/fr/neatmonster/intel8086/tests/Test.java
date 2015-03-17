@@ -9,7 +9,7 @@ import fr.neatmonster.intel8086.Intel8086;
 public class Test {
     protected Intel8086 cpu = new Intel8086();
 
-    protected void execute(final int[] bin) {
+    protected void execute(final int... bin) {
         final int[] code = new int[bin.length + 1];
         for (int i = 0; i < bin.length; i++)
             code[i] = bin[i];
