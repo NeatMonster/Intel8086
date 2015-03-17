@@ -577,10 +577,13 @@ public class Intel8086 {
         case 0xc6: // MOV REG8/MEM8,IMMED8
         case 0xc7: // MOV REG16/MEM16,IMMED16
             decode();
-            src = memory[++ip];
-            if (w == 0b1)
-                src |= memory[++ip] << 8;
-            setRM(w, mod, rm, src);
+            switch (reg) {
+            case 0b000:
+                src = memory[++ip];
+                if (w == 0b1)
+                    src |= memory[++ip] << 8;
+                setRM(w, mod, rm, src);
+            }
             break;
 
         // Immediate to Register
@@ -641,7 +644,68 @@ public class Intel8086 {
             decode();
             setRM(0b1, mod, rm, getSegReg(reg));
             break;
-  
+
+        /*
+         * PUSH source
+         *
+         * PUSH decrements SP (the stack pointer) by two and then transfers a
+         * word from the source operand to the top of the stack now pointer by
+         * SP. PUSH often is used to place parameters on the stack before
+         * calling a procedure; more generally, it is the basic means of
+         * storing temporary data on the stack.
+         */
+        // Register
+        case 0x50: // PUSH AX
+        case 0x51: // PUSH CX
+        case 0x52: // PUSH DX
+        case 0x53: // PUSH BX
+        case 0x54: // PUSH SP
+        case 0x55: // PUSH BP
+        case 0x56: // PUSH SI
+        case 0x57: // PUSH DI
+            reg = queue[0] & 0b111;
+            push(getReg(0b1, reg));
+            break;
+
+        // Segment Register
+        case 0x06: // PUSH ES
+        case 0x0e: // PUSH CS
+        case 0x16: // PUSH SS
+        case 0x1e: // PUSH DS
+            reg = queue[0] >>> 3 & 0b111;
+            push(getSegReg(reg));
+            break;
+
+        /*
+         * POP destination
+         *
+         * POP transfers the word at the current top of the stack (pointed to
+         * by the SP) to the destination operand, and then increments SP by two
+         * to point to the new top of the stack. POP can be used to move
+         * temporary variables from the stack to registers or memory.
+         */
+        // Register
+        case 0x58: // POP AX
+        case 0x59: // POP CX
+        case 0x5a: // POP DX
+        case 0x5b: // POP BX
+        case 0x5c: // POP SP
+        case 0x5d: // POP BP
+        case 0x5e: // POP SI
+        case 0x5f: // POP DI
+            reg = queue[0] & 0b111;
+            setReg(0b1, reg, pop());
+            break;
+
+        // Segment Register
+        case 0x07: // POP ES
+        case 0x0f: // POP CS
+        case 0x17: // POP SS
+        case 0x1f: // POP DS
+            reg = queue[0] >>> 3 & 0b111;
+            setSegReg(reg, pop());
+            break;
+
         /*
          * ADD destination,source
          *
@@ -678,6 +742,10 @@ public class Intel8086 {
             setReg(w, 0, res);
             break;
 
+        /*
+         * Extensions
+         */
+        // GROUP 1
         case 0x80:
             // ADD REG8/MEM8,IMMED8
         case 0x81:
@@ -697,6 +765,28 @@ public class Intel8086 {
                 break;
             }
             setRM(w, mod, rm, res);
+            break;
+
+        // GROUP 1A
+        case 0x8f:
+            // POP REG16/MEM16
+            decode();
+            switch (reg) {
+            case 0b000:
+                setRM(w, mod, rm, pop());
+                break;
+            }
+            break;
+
+        // GROUP 5
+        case 0xff:
+            // PUSH REG16/MEM16
+            decode();
+            switch (reg) {
+            case 0b110:
+                push(getRM(w, mod, rm));
+                break;
+            }
             break;
 
         case 0xc3:
@@ -1032,11 +1122,35 @@ public class Intel8086 {
     }
 
     /**
+     * Pops a value at the top of the stack.
+     *
+     * @return the value
+     */
+    private int pop() {
+        final int val = memory[sp + 1] << 8 | memory[sp];
+        sp += 2;
+        return val;
+    }
+
+    /**
+     * Pushes a value to the top of the stack.
+     *
+     * @param val
+     *            the value
+     */
+    private void push(final int val) {
+        sp -= 2;
+        memory[sp] = val & 0xff;
+        memory[sp + 1] = val >>> 8 & 0xff;
+    }
+
+    /**
      * Resets the CPU to its default state.
      */
     public void reset() {
         flags = 0;
         ip = 0x0000;
+        sp = 0x0100;
         cs = 0xffff;
         ds = 0x0000;
         ss = 0x0000;

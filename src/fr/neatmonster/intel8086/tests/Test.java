@@ -66,5 +66,6 @@ public class Test {
     @Before
     public void setup() {
         cpu = new Intel8086();
+        cpu.reset();
     }
 }

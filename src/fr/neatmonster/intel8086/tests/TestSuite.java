@@ -7,7 +7,9 @@ import org.junit.runners.Suite;
 @RunWith(Suite.class)
 @Suite.SuiteClasses({
     TestAdd.class,
-    TestMov.class
+    TestMov.class,
+    TestPop.class,
+    TestPush.class
 })
 public class TestSuite {
     
