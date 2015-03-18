@@ -504,7 +504,7 @@ public class Intel8086 {
     private int              rm;
 
     /**
-     * Perform addition and set flags accordingly.
+     * Performs addition and sets flags accordingly.
      *
      * @param w
      *            word/byte operation
@@ -512,28 +512,36 @@ public class Intel8086 {
      *            the first operand
      * @param src
      *            the second operand
+     * @param flags
+     *            the flags to set
      * @return the result
      */
-    private int add(final int w, final int dst, final int src) {
+    private int add(final int w, final int dst, final int src, final int flags) {
         final int res = dst + src;
 
         // Carry Flag
-        if (w == 0b0 && res > 0xff || w == 0b1 && res > 0xffff)
-            flags |= CF;
-        else
-            flags &= ~CF;
+        if ((flags & CF) == CF) {
+            if (w == 0b0 && res > 0xff || w == 0b1 && res > 0xffff)
+                this.flags |= CF;
+            else
+                this.flags &= ~CF;
+        }
 
         // Zero Flag
-        if (res == 0)
-            flags |= ZF;
-        else
-            flags &= ~ZF;
+        if ((flags & ZF) == ZF) {
+            if (res == 0)
+                this.flags |= ZF;
+            else
+                this.flags &= ~ZF;
+        }
 
         // Sign Flag
-        if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
-            flags |= SF;
-        else
-            flags &= ~SF;
+        if ((flags & SF) == SF) {
+            if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
+                this.flags |= SF;
+            else
+                this.flags &= ~SF;
+        }
 
         return res & (w == 0b0 ? 0xff : 0xffff);
     }
@@ -565,12 +573,14 @@ public class Intel8086 {
         case 0x88: // MOV REG8/MEM8,REG8
         case 0x89: // MOV REG16/MEM16,REG16
             decode();
-            setRM(w, mod, rm, getReg(w, reg));
+            src = getReg(w, reg);
+            setRM(w, mod, rm, src);
             break;
         case 0x8a: // MOV REG8,REG8/MEM8
         case 0x8b: // MOV REG16,REG16/MEM16
             decode();
-            setReg(w, reg, getRM(w, mod, rm));
+            src = getRM(w, mod, rm);
+            setReg(w, reg, src);
             break;
 
         // Immediate to Register/Memory
@@ -619,7 +629,7 @@ public class Intel8086 {
             src = memory[addr];
             if (w == 0b1)
                 src |= memory[addr + 1] << 8;
-            setReg(w, 0, src);
+            setReg(w, 0b000, src);
             break;
 
         // Accumulator to Memory
@@ -627,7 +637,7 @@ public class Intel8086 {
         case 0xa3: // MOV MEM16,AX
             addr = memory[++ip];
             addr |= memory[++ip] << 8;
-            src = getReg(w, 0);
+            src = getReg(w, 0b000);
             memory[addr] = src & 0xff;
             if (w == 0b1)
                 memory[addr + 1] = src >>> 8 & 0xff;
@@ -636,13 +646,15 @@ public class Intel8086 {
         // Register/Memory to Segment Register
         case 0x8e: // MOV SEGREG,REG16/MEM16
             decode();
-            setSegReg(reg, getRM(0b1, mod, rm));
+            src = getRM(0b1, mod, rm);
+            setSegReg(reg, src);
             break;
 
         // Segment Register to Register/Memory
         case 0x8c: // MOV REG16/MEM16,SEGREG
             decode();
-            setRM(0b1, mod, rm, getSegReg(reg));
+            src = getSegReg(reg);
+            setRM(0b1, mod, rm, src);
             break;
 
         /*
@@ -664,7 +676,8 @@ public class Intel8086 {
         case 0x56: // PUSH SI
         case 0x57: // PUSH DI
             reg = queue[0] & 0b111;
-            push(getReg(0b1, reg));
+            src = getReg(0b1, reg);
+            push(src);
             break;
 
         // Segment Register
@@ -673,7 +686,8 @@ public class Intel8086 {
         case 0x16: // PUSH SS
         case 0x1e: // PUSH DS
             reg = queue[0] >>> 3 & 0b111;
-            push(getSegReg(reg));
+            src = getSegReg(reg);
+            push(src);
             break;
 
         /*
@@ -694,7 +708,8 @@ public class Intel8086 {
         case 0x5e: // POP SI
         case 0x5f: // POP DI
             reg = queue[0] & 0b111;
-            setReg(0b1, reg, pop());
+            src = pop();
+            setReg(0b1, reg, src);
             break;
 
         // Segment Register
@@ -703,7 +718,8 @@ public class Intel8086 {
         case 0x17: // POP SS
         case 0x1f: // POP DS
             reg = queue[0] >>> 3 & 0b111;
-            setSegReg(reg, pop());
+            src = pop();
+            setSegReg(reg, src);
             break;
  
         /*
@@ -754,7 +770,7 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            res = add(w, dst, src);
+            res = add(w, dst, src, CF | SF | ZF);
             setRM(w, mod, rm, res);
             break;
         case 0x02: // ADD REG8,REG8/MEM8
@@ -762,7 +778,7 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            res = add(w, dst, src);
+            res = add(w, dst, src, CF | SF | ZF);
             setReg(w, reg, res);
             break;
 
@@ -773,8 +789,218 @@ public class Intel8086 {
             src = memory[++ip];
             if (w == 0b1)
                 src |= memory[++ip] << 8;
-            res = add(w, dst, src);
-            setReg(w, 0, res);
+            res = add(w, dst, src, CF | SF | ZF);
+            setReg(w, 0b000, res);
+            break;
+
+        /*
+         * ADC destination,source
+         *
+         * ADC (Add with Carry) sums the operands, which may be bytes or words,
+         * adds one if CF is set and replaces the destination operand with the
+         * result. Both operands may be signed or unsigned binary numbers. ADC
+         * updates AF, CF, OF, PF, SF and ZF. Since ADC incorporates a carry
+         * from a previous operation, it can be used to write routines to add
+         * numbers longer than 16 bits.
+         */
+        // Reg./Memory with Register to Either
+        case 0x10: // ADC REG8/MEM8,REG8
+        case 0x11: // ADC REG16/MEM16,REG16
+            decode();
+            dst = getRM(w, mod, rm);
+            src = getReg(w, reg);
+            if ((flags & CF) == CF)
+                ++dst;
+            res = add(w, dst, src, CF | SF | ZF);
+            setRM(w, mod, rm, res);
+            break;
+        case 0x12: // ADC REG8,REG8/MEM8
+        case 0x13: // ADC REG16,REG16/MEM16
+            decode();
+            dst = getReg(w, reg);
+            src = getRM(w, mod, rm);
+            if ((flags & CF) == CF)
+                ++dst;
+            res = add(w, dst, src, CF | SF | ZF);
+            setReg(w, reg, res);
+            break;
+
+        // Immediate to Accumulator
+        case 0x14: // ADC AL,IMMED8
+        case 0X15: // ADC AX,IMMED16
+            dst = getReg(w, 0b000);
+            src = memory[++ip];
+            if (w == 0b1)
+                src |= memory[++ip] << 8;
+            if ((flags & CF) == CF)
+                ++dst;
+            res = add(w, dst, src, CF | SF | ZF);
+            setReg(w, 0b000, res);
+            break;
+
+        /*
+         * INC destination
+         *
+         * INC (Increment) adds one to the destination operand. The operand may
+         * be a byte or a word and is treated as an unsigned binary number. INC
+         * updates AF, OF, PF, SF and ZF; it does not affect CF.
+         */
+        // Register
+        case 0x40: // INC AX
+        case 0x41: // INC CX
+        case 0x42: // INC DX
+        case 0x43: // INC BX
+        case 0x44: // INC SP
+        case 0x45: // INC BP
+        case 0x46: // INC SI
+        case 0x47: // INC DI
+            reg = queue[0] & 0b111;
+            src = getReg(0b1, reg);
+            res = add(0b1, src, 1, SF | ZF);
+            setReg(0b1, reg, res);
+            break;
+
+        /*
+         * SUB destination,source
+         *
+         * The source operand is subtracted from the destination operand, and
+         * the result replaces the destination operand. The operands may be
+         * bytes or words. Both operands may be signed or unsigned binary
+         * numbers. SUB updates AF, CF, OF, PF, SF and ZF.
+         */
+        // Reg./Memory and Register to Either
+        case 0x28: // SUB REG8/MEM8,REG8
+        case 0x29: // SUB REG16/MEM16,REG16
+            decode();
+            dst = getRM(w, mod, rm);
+            src = getReg(w, reg);
+            res = sub(w, dst, src, CF | SF | ZF);
+            setRM(w, mod, rm, res);
+            break;
+        case 0x2a: // SUB REG8,REG8/MEM8
+        case 0x2b: // SUB REG16,REG16/MEM16
+            decode();
+            dst = getReg(w, reg);
+            src = getRM(w, mod, rm);
+            res = sub(w, dst, src, CF | SF | ZF);
+            setReg(w, reg, res);
+            break;
+
+        // Immediate from Accumulator
+        case 0x2c: // SUB AL,IMMED8
+        case 0x2d: // SUB AX,IMMED16
+            dst = getReg(w, 0b000);
+            src = memory[++ip];
+            if (w == 0b1)
+                src |= memory[++ip] << 8;
+            res = sub(w, dst, src, CF | SF | ZF);
+            setReg(w, 0b000, res);
+            break;
+
+        /*
+         * SBB destination,source
+         *
+         * SBB (Subtract with Borrow) subtracts the source from the
+         * destination, subtracts one if CF is set, and returns the result to
+         * the destination operand. Both operands may be bytes or words. Both
+         * operands may be signed or unsigned binary numbers. SBB updates AF,
+         * CF, OF, PF, SF and ZF. Since it incorporates a borrow from a
+         * previous operation, SBB may be used to write routines that subtract
+         * numbers longer than 16 bits.
+         */
+        // Reg./Memory with Register to Either
+        case 0x18: // SBB REG8/MEM8,REG8
+        case 0x19: // SBB REG16/MEM16,REG16
+            decode();
+            dst = getRM(w, mod, rm);
+            src = getReg(w, reg);
+            if ((flags & CF) == CF)
+                --dst;
+            res = sub(w, dst, src, CF | SF | ZF);
+            setRM(w, mod, rm, res);
+            break;
+        case 0x1a: // SBB REG8,REG8/MEM8
+        case 0x1b: // SBB REG16,REG16/MEM16
+            decode();
+            dst = getReg(w, reg);
+            src = getRM(w, mod, rm);
+            if ((flags & CF) == CF)
+                --dst;
+            res = sub(w, dst, src, CF | SF | ZF);
+            setReg(w, reg, res);
+            break;
+
+        // Immediate to Accumulator
+        case 0x1c: // SBB AL,IMMED8
+        case 0X1d: // SBB AX,IMMED16
+            dst = getReg(w, 0b000);
+            src = memory[++ip];
+            if (w == 0b1)
+                src |= memory[++ip] << 8;
+            if ((flags & CF) == CF)
+                --dst;
+            res = sub(w, dst, src, CF | SF | ZF);
+            setReg(w, 0b000, res);
+            break;
+
+        /*
+         * DEC destination
+         *
+         * DEC (Decrement) subtracts one from the destination, which may be a
+         * byte or a word. DEC updates AF, OF, PF, SF, and ZF; it does not
+         * affect CF.
+         */
+        // Register
+        case 0x48: // DEC AX
+        case 0x49: // DEC CX
+        case 0x4a: // DEC DX
+        case 0x4b: // DEC BX
+        case 0x4c: // DEC SP
+        case 0x4d: // DEC BP
+        case 0x4e: // DEC SI
+        case 0x4f: // DEC DI
+            reg = queue[0] & 0b111;
+            dst = getReg(0b1, reg);
+            res = sub(0b1, dst, 1, SF | ZF);
+            setReg(0b1, reg, res);
+            break;
+
+        /*
+         * CMP destination,source
+         *
+         * CMP (Compare) subtracts the source from the destination, which may
+         * be bytes or words, but does not return the result. The operands are
+         * unchanged, but the flags are updated and can be tested by the
+         * subsequent conditional jump instructions. CMP updates AF, CF, OF,
+         * PF, SF and ZF. The comparison reflected in the flags is that of the
+         * destination to the source. If a CMP instruction is followed by a JG
+         * (jump if greater) instruction, for example, the jump is taken if the
+         * destination operand is greater than the source operand.
+         */
+        // Register/Memory and Register
+        case 0x38: // CMP REG8/MEM8,REG8
+        case 0x39: // CMP REG16/MEM16,REG16
+            decode();
+            dst = getRM(w, mod, rm);
+            src = getReg(w, reg);
+            sub(w, dst, src, CF | SF | ZF);
+            break;
+        case 0x3a: // CMP REG8,REG8/MEM8
+        case 0x3b: // CMP REG16,REG16/MEM16
+            decode();
+            dst = getReg(w, reg);
+            src = getRM(w, mod, rm);
+            sub(w, dst, src, CF | SF | ZF);
+            break;
+
+        // Immediate with Accumulator
+        case 0x3c: // CMP AL,IMMED8
+        case 0x3d: // CMP AX,IMMED16
+            dst = getReg(w, 0b000);
+            src = memory[++ip];
+            if (w == 0b1)
+                src |= memory[++ip];
+            sub(w, dst, src, CF | SF | ZF);
             break;
 
         /*
@@ -783,23 +1009,61 @@ public class Intel8086 {
         // GROUP 1
         case 0x80:
             // ADD REG8/MEM8,IMMED8
+            // ADC REG8/MEM8,IMMED8
+            // SBB REG8/MEM8,IMMED8
+            // SUB REG8/MEM8,IMMED8
+            // CMP REG8/MEM8,IMMED8
         case 0x81:
             // ADD REG16/MEM16,IMMED16
+            // ADC REG16/MEM16,IMMED16
+            // SBB REG16/MEM16,IMMED16
+            // SUB REG16/MEM16,IMMED16
+            // CMP REG16/MEM16,IMMED16
         case 0x82:
             // ADD REG8/MEM8,IMMED8
+            // ADC REG8/MEM8,IMMED8
+            // SBB REG8/MEM8,IMMED8
+            // SUB REG8/MEM8,IMMED8
+            // CMP REG8/MEM8,IMMED8
         case 0x83:
             // ADD REG16/MEM16,IMMED8
+            // ADC REG16/MEM16,IMMED8
+            // SBB REG16/MEM16,IMMED8
+            // SUB REG16/MEM16,IMMED8
+            // CMP REG16/MEM16,IMMED8
             decode();
             dst = getRM(w, mod, rm);
             src = memory[++ip];
             if (queue[0] == 0x81)
                 src |= memory[++ip] << 8;
+            // Perform sign extension if needed.
+            else if (queue[0] == 0x83 && (src & 0x80) == 0x80)
+                src |= 0xff00;
             switch (reg) {
-            case 0b000:
-                res = add(w, dst, src);
+            case 0b000: // ADD
+                res = add(w, dst, src, CF | SF | ZF);
+                setRM(w, mod, rm, res);
+                break;
+            case 0b010: // ADC
+                if ((flags & CF) == CF)
+                    ++dst;
+                res = add(w, dst, src, CF | SF | ZF);
+                setRM(w, mod, rm, res);
+                break;
+            case 0b011: // SBB
+                if ((flags & CF) == CF)
+                    --dst;
+                res = sub(w, dst, src, CF | SF | ZF);
+                setRM(w, mod, rm, res);
+                break;
+            case 0b101: // SUB
+                res = sub(w, dst, src, CF | SF | ZF);
+                setRM(w, mod, rm, res);
+                break;
+            case 0b111: // CMP
+                sub(w, dst, src, CF | SF | ZF);
                 break;
             }
-            setRM(w, mod, rm, res);
             break;
 
         // GROUP 1A
@@ -807,19 +1071,49 @@ public class Intel8086 {
             // POP REG16/MEM16
             decode();
             switch (reg) {
-            case 0b000:
-                setRM(w, mod, rm, pop());
+            case 0b000: // POP
+                src = pop();
+                setRM(w, mod, rm, src);
+                break;
+            }
+            break;
+
+        // GROUP 4
+        case 0xfe:
+            // INC REG8/MEM8
+            // DEC REG8/MEM8
+            decode();
+            src = getRM(w, mod, rm);
+            switch (reg) {
+            case 0b000: // INC
+                res = add(w, src, 1, SF | ZF);
+                setRM(w, mod, rm, res);
+                break;
+            case 0b001: // DEC
+                res = sub(w, src, 1, SF | ZF);
+                setRM(w, mod, rm, res);
                 break;
             }
             break;
 
         // GROUP 5
         case 0xff:
+            // INC REG16/MEM16
+            // DEC REG16/MEM16
             // PUSH REG16/MEM16
             decode();
+            src = getRM(w, mod, rm);
             switch (reg) {
-            case 0b110:
-                push(getRM(w, mod, rm));
+            case 0b000: // INC
+                res = add(w, src, 1, SF | ZF);
+                setRM(w, mod, rm, res);
+                break;
+            case 0b001: // DEC
+                res = sub(w, src, 1, SF | ZF);
+                setRM(w, mod, rm, res);
+                break;
+            case 0b110: // PUSH
+                push(src);
                 break;
             }
             break;
@@ -1339,5 +1633,54 @@ public class Intel8086 {
             ds = val & 0xffff;
             break;
         }
+    }
+
+    /**
+     * Performs subtraction and sets flags accordingly.
+     *
+     * @param w
+     *            word/byte operation
+     * @param dst
+     *            the first operand
+     * @param src
+     *            the second operand
+     * @param flags
+     *            the flags to set
+     * @return the result
+     */
+    private int sub(final int w, final int dst, final int src, final int flags) {
+        int res = dst - src;
+
+        // Handle overflow.
+        if (w == 0b0 && res < 0)
+            res += 0x100;
+        else if (w == 0b1 && res < 0)
+            res += 0x10000;
+
+        // Carry Flag
+        if ((flags & CF) == CF) {
+            if (dst < src)
+                this.flags |= CF;
+            else
+                this.flags &= ~CF;
+        }
+
+        // Zero Flag
+        if ((flags & ZF) == ZF) {
+            if (res == 0)
+                this.flags |= ZF;
+            else
+                this.flags &= ~ZF;
+        }
+
+        // Sign Flag
+        if ((flags & SF) == SF) {
+            if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
+                this.flags |= SF;
+            else
+                this.flags &= ~SF;
+        }
+
+        return res & (w == 0b0 ? 0xff : 0xffff);
     }
 }
