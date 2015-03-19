@@ -546,6 +546,45 @@ public class Intel8086 {
         return res & (w == 0b0 ? 0xff : 0xffff);
     }
 
+   /**
+    * Performs logical AND and sets flags accordingly.
+    *
+    * @param w
+    *            word/byte operation
+    * @param dst
+    *            the first operand
+    * @param src
+    *            the second operand
+    * @param flags
+    *            the flags to set
+    * @return the result
+    */
+   private int and(final int w, final int dst, final int src, final int flags) {
+       final int res = dst & src;
+
+       // Carry Flag
+       if ((flags & CF) == CF)
+           this.flags &= ~CF;
+
+       // Zero Flag
+       if ((flags & ZF) == ZF) {
+           if (res == 0)
+               this.flags |= ZF;
+           else
+               this.flags &= ~ZF;
+       }
+
+       // Sign Flag
+       if ((flags & SF) == SF) {
+           if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
+               this.flags |= SF;
+           else
+               this.flags &= ~SF;
+       }
+
+       return res & (w == 0b0 ? 0xff : 0xffff);
+   }
+
     /**
      * Executes one cycle: fetch and execute.
      *
@@ -1004,20 +1043,138 @@ public class Intel8086 {
             break;
 
         /*
+         * AND destination,source
+         *
+         * AND performs the logical "and" of the two operands (byte or word)
+         * and returns the result to the destination operand. A bit in the
+         * result is set if both corresponding bits of the original operands
+         * are set; otherwise the bit is cleared.
+         */
+        // Register/Memory and Register
+        case 0x20: // AND REG8/MEM8,REG8
+        case 0x21: // AND REG16/MEM16,REG16
+            decode();
+            dst = getRM(w, mod, rm);
+            src = getReg(w, reg);
+            res = and(w, dst, src, CF | SF | ZF);
+            setRM(w, mod, rm, res);
+            break;
+        case 0x22: // AND REG8,REG8/MEM8
+        case 0x23: // AND REG16,REG16/MEM16
+            decode();
+            dst = getReg(w, reg);
+            src = getRM(w, mod, rm);
+            res = and(w, dst, src, CF | SF | ZF);
+            setReg(w, reg, res);
+            break;
+
+        // Immediate to Accumulator
+        case 0x24: // AND AL,IMMED8
+        case 0x25: // AND AX,IMMED16
+            dst = getReg(w, 0b000);
+            src = memory[++ip];
+            if (w == 0b1)
+                src |= memory[++ip];
+            res = and(w, dst, src, CF | SF | ZF);
+            setReg(w, 0b000, res);
+            break;
+
+        /*
+         * OR destination,source
+         *
+         * OR performs the logical "inclusive or" of the two operands (byte or
+         * word) and returns the result to the destination operand. A bit in
+         * the result is set if either or both corresponding bits of the
+         * original operands are set; otherwise the result bit is cleared.
+         */
+        // Register/Memory and Register
+        case 0x08: // OR REG8/MEM8,REG8
+        case 0x09: // OR REG16/MEM16,REG16
+            decode();
+            dst = getRM(w, mod, rm);
+            src = getReg(w, reg);
+            res = or(w, dst, src, CF | SF | ZF);
+            setRM(w, mod, rm, res);
+            break;
+        case 0x0a: // OR REG8,REG8/MEM8
+        case 0x0b: // OR REG16,REG16/MEM16
+            decode();
+            dst = getReg(w, reg);
+            src = getRM(w, mod, rm);
+            res = or(w, dst, src, CF | SF | ZF);
+            setReg(w, reg, res);
+            break;
+
+        // Immediate to Accumulator
+        case 0x0c: // OR AL,IMMED8
+        case 0x0d: // OR AX,IMMED16
+            dst = getReg(w, 0b000);
+            src = memory[++ip];
+            if (w == 0b1)
+                src |= memory[++ip];
+            res = or(w, dst, src, CF | SF | ZF);
+            setReg(w, 0b000, res);
+            break;
+
+        /*
+         * XOR destination,source
+         *
+         * XOR (Exclusive Or) performs the logical "exclusive or" of the two
+         * operands and returns the result to the destination operand. A bit in
+         * the result if set if the corresponding bits of the original operands
+         * contain opposite values (one is set, the other is cleared);
+         * otherwise the result bit is cleared.
+         */
+        // Register/Memory and Register
+        case 0x30: // XOR REG8/MEM8,REG8
+        case 0x31: // XOR REG16/MEM16,REG16
+            decode();
+            dst = getRM(w, mod, rm);
+            src = getReg(w, reg);
+            res = xor(w, dst, src, CF | SF | ZF);
+            setRM(w, mod, rm, res);
+            break;
+        case 0x32: // XOR REG8,REG8/MEM8
+        case 0x33: // XOR REG16,REG16/MEM16
+            decode();
+            dst = getReg(w, reg);
+            src = getRM(w, mod, rm);
+            res = xor(w, dst, src, CF | SF | ZF);
+            setReg(w, reg, res);
+            break;
+
+        // Immediate to Accumulator
+        case 0x34: // XOR AL,IMMED8
+        case 0x35: // XOR AX,IMMED16
+            dst = getReg(w, 0b000);
+            src = memory[++ip];
+            if (w == 0b1)
+                src |= memory[++ip];
+            res = xor(w, dst, src, CF | SF | ZF);
+            setReg(w, 0b000, res);
+            break;
+
+        /*
          * Extensions
          */
         // GROUP 1
         case 0x80:
             // ADD REG8/MEM8,IMMED8
+            // OR REG8/MEM8,IMMED8
             // ADC REG8/MEM8,IMMED8
             // SBB REG8/MEM8,IMMED8
+            // AND REG8/MEM8,IMMED8
             // SUB REG8/MEM8,IMMED8
+            // XOR REG8/MEM8,IMMED8
             // CMP REG8/MEM8,IMMED8
         case 0x81:
             // ADD REG16/MEM16,IMMED16
+            // OR REG16/MEM16,IMMED16
             // ADC REG16/MEM16,IMMED16
             // SBB REG16/MEM16,IMMED16
+            // AND REG16/MEM16,IMMED16
             // SUB REG16/MEM16,IMMED16
+            // XOR REG16/MEM16,IMMED16
             // CMP REG16/MEM16,IMMED16
         case 0x82:
             // ADD REG8/MEM8,IMMED8
@@ -1044,6 +1201,13 @@ public class Intel8086 {
                 res = add(w, dst, src, CF | SF | ZF);
                 setRM(w, mod, rm, res);
                 break;
+            case 0b001: // OR
+                if (queue[0] == 0x80 || queue[0] == 0x81) {
+                    res = or(w, dst, src, CF | SF | ZF);
+                    setRM(w, mod, rm, res);
+                    break;
+                }
+                break;
             case 0b010: // ADC
                 if ((flags & CF) == CF)
                     ++dst;
@@ -1056,9 +1220,21 @@ public class Intel8086 {
                 res = sub(w, dst, src, CF | SF | ZF);
                 setRM(w, mod, rm, res);
                 break;
+            case 0b100: // AND
+                if (queue[0] == 0x80 || queue[0] == 0x81) {
+                    res = and(w, dst, src, CF | SF | ZF);
+                    setRM(w, mod, rm, res);
+                }
+                break;
             case 0b101: // SUB
                 res = sub(w, dst, src, CF | SF | ZF);
                 setRM(w, mod, rm, res);
+                break;
+            case 0b110: // XOR
+                if (queue[0] == 0x80 || queue[0] == 0x81) {
+                    res = xor(w, dst, src, CF | SF | ZF);
+                    setRM(w, mod, rm, res);
+                }
                 break;
             case 0b111: // CMP
                 sub(w, dst, src, CF | SF | ZF);
@@ -1451,6 +1627,45 @@ public class Intel8086 {
     }
 
     /**
+     * Performs logical OR and sets flags accordingly.
+     *
+     * @param w
+     *            word/byte operation
+     * @param dst
+     *            the first operand
+     * @param src
+     *            the second operand
+     * @param flags
+     *            the flags to set
+     * @return the result
+     */
+    private int or(final int w, final int dst, final int src, final int flags) {
+        final int res = dst | src;
+
+        // Carry Flag
+        if ((flags & CF) == CF)
+            this.flags &= ~CF;
+
+        // Zero Flag
+        if ((flags & ZF) == ZF) {
+            if (res == 0)
+                this.flags |= ZF;
+            else
+                this.flags &= ~ZF;
+        }
+
+        // Sign Flag
+        if ((flags & SF) == SF) {
+            if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
+                this.flags |= SF;
+            else
+                this.flags &= ~SF;
+        }
+
+        return res & (w == 0b0 ? 0xff : 0xffff);
+    }
+
+    /**
      * Pops a value at the top of the stack.
      *
      * @return the value
@@ -1664,6 +1879,45 @@ public class Intel8086 {
             else
                 this.flags &= ~CF;
         }
+
+        // Zero Flag
+        if ((flags & ZF) == ZF) {
+            if (res == 0)
+                this.flags |= ZF;
+            else
+                this.flags &= ~ZF;
+        }
+
+        // Sign Flag
+        if ((flags & SF) == SF) {
+            if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
+                this.flags |= SF;
+            else
+                this.flags &= ~SF;
+        }
+
+        return res & (w == 0b0 ? 0xff : 0xffff);
+    }
+
+    /**
+     * Performs logical XOR and sets flags accordingly.
+     *
+     * @param w
+     *            word/byte operation
+     * @param dst
+     *            the first operand
+     * @param src
+     *            the second operand
+     * @param flags
+     *            the flags to set
+     * @return the result
+     */
+    private int xor(final int w, final int dst, final int src, final int flags) {
+        final int res = dst ^ src;
+
+        // Carry Flag
+        if ((flags & CF) == CF)
+            this.flags &= ~CF;
 
         // Zero Flag
         if ((flags & ZF) == ZF) {
