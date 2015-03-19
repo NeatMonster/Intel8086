@@ -13,8 +13,8 @@ public class TestAdd extends fr.neatmonster.intel8086.tests.Test {
         execute(0x00, 0b11_111_011);
         assertEquals("ADD REG8,REG8", 3, getRegister("bl"));
 
-        setRegister("bl", 1);
-        setMemory(0x42, 2);
+        setMemory(0x42, 1);
+        setRegister("bl", 2);
         execute(0x00, 0b00_011_110, 0x42, 0x00);
         assertEquals("ADD MEM8,REG8", 3, getMemory(0x42));
     }
@@ -29,10 +29,10 @@ public class TestAdd extends fr.neatmonster.intel8086.tests.Test {
         assertEquals("ADD REG16,REG16", 4, getRegister("bl"));
         assertEquals("ADD REG16,REG16", 6, getRegister("bh"));
 
-        setRegister("bl", 1);
-        setRegister("bh", 2);
-        setMemory(0x42, 3);
-        setMemory(0x43, 4);
+        setMemory(0x42, 1);
+        setMemory(0x43, 2);
+        setRegister("bl", 3);
+        setRegister("bh", 4);
         execute(0x01, 0b00_011_110, 0x42, 0x00);
         assertEquals("ADD MEM16,REG16", 4, getMemory(0x42));
         assertEquals("ADD MEM16,REG16", 6, getMemory(0x43));
@@ -40,8 +40,8 @@ public class TestAdd extends fr.neatmonster.intel8086.tests.Test {
 
     @Test
     public void test02() {
-        setRegister("bl", 1);
-        setRegister("bh", 2);
+        setRegister("bh", 1);
+        setRegister("bl", 2);
         execute(0x02, 0b11_111_011);
         assertEquals("ADD REG8,REG8", 3, getRegister("bh"));
 
@@ -53,10 +53,10 @@ public class TestAdd extends fr.neatmonster.intel8086.tests.Test {
 
     @Test
     public void test03() {
-        setRegister("bl", 1);
-        setRegister("bh", 2);
-        setRegister("cl", 3);
-        setRegister("ch", 4);
+        setRegister("cl", 1);
+        setRegister("ch", 2);
+        setRegister("bl", 3);
+        setRegister("bh", 4);
         execute(0x03, 0b11_001_011);
         assertEquals("ADD REG16,REG16", 4, getRegister("cl"));
         assertEquals("ADD REG16,REG16", 6, getRegister("ch"));
