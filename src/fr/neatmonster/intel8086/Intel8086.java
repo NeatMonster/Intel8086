@@ -600,8 +600,20 @@ public class Intel8086 {
         d = queue[0] >>> 1 & 0b1;
         w = queue[0] & 0b1;
 
-        int dst, src, res = 0, addr;
+        int dst, src, res = 0;
         switch (queue[0]) {
+        /*
+         * Data Transfer Instructions
+         *
+         * The 14 data transfer instructions move single bytes and words
+         * between memory and registers as well as between registers AL or AX
+         * and I/O ports. The stack manipulation instructions are included in
+         * this group as are instructions for transferring flags contents and
+         * for loading segment registers.
+         */
+        /*
+         * General Purpose Data Transfers
+         */
         /*
          * MOV destination,source
          *
@@ -663,23 +675,23 @@ public class Intel8086 {
         // Memory to Accumulator
         case 0xa0: // MOV AL,MEM8
         case 0xa1: // MOV AX,MEM16
-            addr = memory[++ip];
-            addr |= memory[++ip] << 8;
-            src = memory[addr];
+            dst = memory[++ip];
+            dst |= memory[++ip] << 8;
+            src = memory[dst];
             if (w == 0b1)
-                src |= memory[addr + 1] << 8;
+                src |= memory[dst + 1] << 8;
             setReg(w, 0b000, src);
             break;
 
         // Accumulator to Memory
         case 0xa2: // MOV MEM8,AL
         case 0xa3: // MOV MEM16,AX
-            addr = memory[++ip];
-            addr |= memory[++ip] << 8;
+            dst = memory[++ip];
+            dst |= memory[++ip] << 8;
             src = getReg(w, 0b000);
-            memory[addr] = src & 0xff;
+            memory[dst] = src & 0xff;
             if (w == 0b1)
-                memory[addr + 1] = src >>> 8 & 0xff;
+                memory[dst + 1] = src >>> 8 & 0xff;
             break;
 
         // Register/Memory to Segment Register
@@ -797,6 +809,88 @@ public class Intel8086 {
             break;
 
         /*
+         * Arithmetic Instructions
+         *
+         * Arithmetic Data Formats
+         *
+         * 8086 arithmetic operations may be performed on four types of
+         * numbers: unsigned binary, signed binary (integers), unsigned packed
+         * decimal and unsigned unpacked decimal. Binary numbers may be 8 or 16
+         * bits long. Decimal numbers are stored in bytes, two digits per byte
+         * for packed decimals and one digit per byte for unpacked decimal. The
+         * processor always assumes that the operands specified in arithmetic
+         * instructions contain data that represents valid numbers for the type
+         * of instructions being performed. Invalid data may produce
+         * unpredictable results.
+         *
+         * Unsigned binary numbers may be either 8 or 16 bits long; all bits
+         * are considered in determining a number's magnitude. The value range
+         * of an 8-bit unsigned binary number is 0-255; 16 bits can represent
+         * values from 0 through 65,535. Addition, subtraction, multiplication
+         * and division operations are available for unsigned binary numbers.
+         *
+         * Signed binary numbers (integer) may be either 8 or 16 bits long. The
+         * high-order (leftmost) bit is interpreted as the number's sign: 0 =
+         * positive and 1 = negative. Negative numbers are represented in
+         * standard two's complement notation. Since the high-order is used for
+         * a sign, the range of an 8-bit integer is -128 through +127; 16-bit
+         * integer may range from -32,768 through +32,767. The value zero has a
+         * positive sign. Multiplication and division operations are provided
+         * for signed binary numbers. Addition and subtraction are performed
+         * with the unsigned binary instructions. Conditional jump
+         * instructions, as well as an "interrupt on overflow" instruction, can
+         * be used following an unsigned operation on an integer to detect
+         * overflow into the sign bit.
+         *
+         * Packed decimal numbers are stored as unsigned byte quantities. The
+         * byte is treated as having one decimal digit in each half-byte
+         * (nibble); the digit in the high-order half-byte is the most
+         * significant. Hexadecimal values 0-9 are valid in each half-byte, and
+         * the range of a packed decimal number is 0-99. Addition and
+         * subtraction are performed in two steps. First an unsigned binary
+         * instruction is used to produce an intermediate result in register
+         * AL. The an adjustment operation is performed which changes the
+         * intermediate value in AL to a final correct packed decimal result.
+         * Multiplication and division adjustments are not available for packed
+         * decimal numbers.
+         *
+         * Unpacked decimal numbers are stored as unsigned byte quantities. The
+         * magnitude of the number is determined from the low-order half-byte;
+         * hexadecimal values 0-9 are valid and are interpreted as decimal
+         * numbers. The high-order half-byte must be zero for multiplication
+         * and division; it may contain any value from addition and
+         * subtraction. Arithmetic on unpacked decimal numbers is performed in
+         * two steps. The unsigned binary addition, subtraction and
+         * multiplication operations are used to produce an intermediate result
+         * in register AL. An adjustment instruction then changes the value in
+         * AL to a final correct unpacked decimal number. Division is performed
+         * similarly, except that the adjustment is carried out on the
+         * numerator operand in register AL first, then a following unsigned
+         * binary division instruction produces a correct result.
+         *
+         * Unpacked decimal numbers are similar to the ASCII character
+         * representations of the digits 0-9. Note, however, that the high-
+         * order half-byte of an ASCII numeral is always 3H. Unpacked decimal
+         * arithmetic may be performed on ASCII number characters under the
+         * following conditions:
+         * - the high-order half-byte of an ASCII numeral must be set to 0H
+         * prior to multiplication or division.
+         * - unpacked decimal arithmetic leaves the high-order half-byte set to
+         * 0H; it must be set to 3H to produce a valid ASCII numeral.
+         *
+         * Arithmetic Instructions and Flags
+         *
+         * The 8086 arithmetic instructions post certain characteristics of the
+         * result of the operation to six flags. Most of these flags can be
+         * tested by following the arithmetic instruction with a conditional
+         * jump instruction; the INTO (interrupt on overflow) instruction may
+         * also be used. The various instructions affect the flags differently,
+         * as explained in the instruction descriptions.
+         */
+        /*
+         * Addition
+         */
+        /*
          * ADD destination,source
          *
          * The sum of the two operands, which may be bytes or words, replaces
@@ -899,6 +993,9 @@ public class Intel8086 {
             setReg(0b1, reg, res);
             break;
 
+        /*
+         * Subtraction
+         */
         /*
          * SUB destination,source
          *
@@ -1038,10 +1135,37 @@ public class Intel8086 {
             dst = getReg(w, 0b000);
             src = memory[++ip];
             if (w == 0b1)
-                src |= memory[++ip];
+                src |= memory[++ip] << 8;
             sub(w, dst, src, CF | SF | ZF);
             break;
 
+        /*
+         * Bit Manipulation Instructions
+         *
+         * The 8086 provides three groups of instructions for manipulating bits
+         * within both bytes and words: logical, shifts and rotates.
+         */
+        /*
+         * Logical
+         *
+         * The logical instructions include the boolean operators "not," "and,"
+         * "inclusive or," and "exclusive or," plus a TEST instruction that
+         * sets the flags, but does not alter either of its operands.
+         *
+         * AND, OR, XOR and TEST affect the flags as follows: the overflow (OF)
+         * and carry (CF) flags are always cleared by logical instructions, and
+         * the content of the auxiliary carry (AF) flag is always undefined
+         * following execution of a logical instruction. The sign (SF), zero
+         * (ZF) and parity (PF) flags are always posted to reflect the result
+         * of the operation and can be tested by conditional jump instructions.
+         * The interpretation of these flags is the same as for arithmetic
+         * instructions. SF is set if the result is negative (high-order bit is
+         * 1), and is cleared if the result is positive (high-order bit is 0).
+         * ZF is set if the result is zero, cleared otherwise. PF is set if the
+         * result contains an even number of 1-bits (has even parity) and is
+         * cleared if the number of 1-bits is odd (the result has odd parity).
+         * Note that NOT has no effect on the flags.
+         */
         /*
          * AND destination,source
          *
@@ -1074,7 +1198,7 @@ public class Intel8086 {
             dst = getReg(w, 0b000);
             src = memory[++ip];
             if (w == 0b1)
-                src |= memory[++ip];
+                src |= memory[++ip] << 8;
             res = and(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -1111,7 +1235,7 @@ public class Intel8086 {
             dst = getReg(w, 0b000);
             src = memory[++ip];
             if (w == 0b1)
-                src |= memory[++ip];
+                src |= memory[++ip] << 8;
             res = or(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -1149,9 +1273,220 @@ public class Intel8086 {
             dst = getReg(w, 0b000);
             src = memory[++ip];
             if (w == 0b1)
-                src |= memory[++ip];
+                src |= memory[++ip] << 8;
             res = xor(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
+            break;
+
+        /*
+         * Program Transfer Instructions
+         *
+         * The sequence of execution of instructions in an 8086 program is
+         * determined by the content of the code segment register (CS) and the
+         * instruction pointer (IP). The CS register contains the base address
+         * of the current code segment, the 64k portion of memory from which
+         * instructions are presently being fetched. The IP is used as an
+         * offset from the beginning of the code segment; the combination of CS
+         * and IP points to the memory location from which the next instruction
+         * is to be fetched. (Recall that under most operating conditions, the
+         * next instruction to be executed has already been fetched from memory
+         * and is waiting in the CPU instruction queue.) The program transfer
+         * instructions operate on the instruction pointer and on the CS
+         * register; changing the content of these causes normal sequential
+         * execution to be altered. When a program transfer occurs, the queue
+         * no longer contains the correct instruction, and the BIU obtains the
+         * next instruction from memory using the new IP and CS values, passes
+         * the instruction directly to the EU, and then begins refilling the
+         * queue from the new location.
+         *
+         * Four groups of program transfers are available in the 8086:
+         * unconditional transfers, conditional transfers, iteration control
+         * instructions and interrupt-related instructions. Only the interrupt-
+         * related instruction affect any CPU flags. As will be seen, however,
+         * the execution of many of the program transfer instructions is
+         * affected by the states of the flags.
+         */
+        /*
+         * Unconditional Transfers
+         *
+         * The unconditional transfers instructions may transfer control to a
+         * target instruction within the current code segment (intrasegment
+         * transfer) or to a different code segment (intersegment transfer).
+         * (The ASM-86 assembler terms an intrasegment target NEAR and an
+         * intersegment target FAR.) The transfer is made unconditionally any
+         * time the instruction is executed.
+         */
+        /*
+         * CALL procedure-name
+         *
+         * CALL activated an out-of-line procedure, saving information on the
+         * stack to permit a RET (return) instruction in the procedure to
+         * transfer control back to the instruction following the CALL. The
+         * assembler generates a different type of CALL instruction depending
+         * on whether the programmer has defined the procedure name as NEAR or
+         * FAR. For control to return properly, the type of CALL instruction
+         * must match the type of RET instruction that exists from the
+         * procedure. (The potential for a mismatch exists if the procedure and
+         * the CALL are contained in separately assembled programs.) Different
+         * forms of the CALL instruction allow the address of the target
+         * procedure to be obtained from the instruction itself (direct CALL)
+         * or from a memory location or register referenced by the instruction
+         * (indirect CALL). In the following descriptions, bear in mind that
+         * the processor automatically adjusts IP to point to the next
+         * instruction to be executed before saving it on the stack.
+         *
+         * For an intrasegment direct CALL, SP (the stack pointer) is
+         * decremented by two and IP is pushed onto the stack. The relative
+         * displacement (up to ±32k) of the target procedure from the CALL
+         * instruction is then added to the instruction pointer. This form of
+         * the CALL instruction is "self-relative" and is appropriate for
+         * position independent (dynamically relocatable) routines in which the
+         * CALL and its target are in the same segment and are moved together.
+         *
+         * An intrasegment indirect CALL may be made through memory or through
+         * a register. SP is decremented by two and IP is pushed onto the
+         * stack. The offset of the target procedure is obtained from the
+         * memory word or 16-bit general register referenced in the instruction
+         * and replaces IP.
+         *
+         * For an intersegment direct CALL, SP is decremented by two, and CS is
+         * pushed onto the stack. CS is replaced by the segment word contained
+         * in the instruction. SP again is decremented by two. IP is pushed
+         * onto the stack and is replaced by the offset word contained in the
+         * instruction.
+         *
+         * For an intersegment indirect CALL (which only may be made through
+         * memory), SP is decremented by two, and CS is pushed onto the stack.
+         * CS is then replaced by the content of the second word of the
+         * doubleword memory pointer referenced by the instruction. SP again is
+         * decremented by two, and IP is pushed onto the stack and is replaced
+         * by the content of the first word of the doubleword pointer
+         * referenced by the instruction.
+         */
+        // Direct with Segment
+        case 0xe8: // CALL NEAR-PROC
+            dst = memory[++ip];
+            dst |= memory[++ip] << 8;
+            // Unsigned to signed.
+            dst = dst << 16 >> 16;
+            push(ip);
+            ip += dst;
+            break;
+
+        // Direct Intersegment
+        case 0x9a: // CALL FAR-PROC
+            dst = memory[++ip];
+            dst |= memory[++ip] << 8;
+            src = memory[++ip];
+            src |= memory[++ip] << 8;
+            push(cs);
+            push(ip);
+            ip = dst;
+            cs = src;
+            break;
+
+        /*
+         * RET optional-pop-value
+         *
+         * RET (Return) transfers control from a procedure back to the
+         * instruction following the CALL that activated the procedure. The
+         * assembler generates an intrasegment RET if the programmer has
+         * defined the procedure NEAR, or an intersegment RET if the procedure
+         * has been defined as FAR. RET pops the word at the top of the stack
+         * (pointed to by the register SP) into the instruction pointer and
+         * increments SP by two. If RET is intersegment, the word at the top of
+         * the stack is popped into the CS register, and SP is again
+         * incremented by two. If an optional pop value has been specified, RET
+         * adds that value to SP. This feature may be used to discard
+         * parameters pushed onto the stack before the execution of the CALL
+         * instruction.
+         */
+        // Within Segment
+        case 0xc3: // RET (intrasegment)
+            ip = pop();
+            break;
+
+        // Within Seg Adding Immed to SP
+        case 0xc2: // RET IMMED16 (intraseg)
+            src = memory[++ip];
+            src |= memory[++ip] << 8;
+            ip = pop();
+            sp += src;
+            break;
+
+        // Intersegment
+        case 0xcb: // RET (intersegment)
+            ip = pop();
+            cs = pop();
+            break;
+
+        // Intersegment Adding Immediate to SP
+        case 0xca: // RET IMMED16 (intersegment)
+            src = memory[++ip];
+            src |= memory[++ip] << 8;
+            ip = pop();
+            cs = pop();
+            sp += src;
+            break;
+
+        /*
+         * JMP target
+         *
+         * JMP unconditionally transfers control to the target location. Unlike
+         * a CALL instruction, JMP does not save any information on the stack,
+         * and no return to the instruction following the JMP is expected. Like
+         * CALL, the address of the target operand may be obtained from the
+         * instruction itself (direct JMP) or from memory or a register
+         * referenced by the instruction (indirect JMP).
+         *
+         * An intrasegment direct JMP changes the instruction pointer by adding
+         * the relative displacement of the target from the JMP instruction. If
+         * the assembler can determine that the target is within 127 bytes of
+         * the JMP, it automatically generates a two-byte form of this
+         * instruction called a SHORT JMP; otherwise, it generates a NEAR JMP
+         * that can address a target within ±32k. Intrasegment direct JMPS are
+         * self-relative and are appropriate in position-independent
+         * (dynamically relocatable) routines in which the JMP and its target
+         * are in the same segment and are moved together.
+         *
+         * An intrasegment indirect JMP may be made either through memory or
+         * through a 16-bit general register. In the first case, the content of
+         * the word referenced by the instruction replaces the instruction
+         * pointer. In the second case, the new IP value is taken from the
+         * register named in the instruction.
+         *
+         * An intersegment direct JMP replaces IP and CS with values contained
+         * in the instruction.
+         *
+         * An intersegment indirect JMP may be made only through memory. The
+         * first word of the doubleword pointer referenced by the instruction
+         * replaces IP, and the second word replaces CS.
+         */
+        // Direct within Segment
+        case 0xe9: // JMP NEAR-LABEL
+            dst = memory[++ip];
+            dst |= memory[++ip] << 8;
+            // Unsigned to signed.
+            dst = dst << 16 >> 16;
+            ip += dst;
+            break;
+
+        // Direct within Segment-Short
+        case 0xeb: // JMP SHORT-LABEL
+            dst = memory[++ip];
+            // Unsigned to signed.
+            dst = dst << 24 >> 24;
+            ip += dst;
+            break;
+
+        // Direct Intersegment
+        case 0xea: // JMP FAR-LABEL
+            dst = memory[++ip];
+            dst |= memory[++ip] << 8;
+            src = memory[++ip];
+            src |= memory[++ip] << 8;
+            ip = dst;
+            cs = src;
             break;
 
         /*
@@ -1276,6 +1611,10 @@ public class Intel8086 {
         case 0xff:
             // INC REG16/MEM16
             // DEC REG16/MEM16
+            // CALL REG16/MEM16 (intra)
+            // CALL MEM16 (intersegment)
+            // JMP REG16/MEM16 (intra)
+            // JMP MEM16 (intersegment)
             // PUSH REG16/MEM16
             decode();
             src = getRM(w, mod, rm);
@@ -1288,14 +1627,30 @@ public class Intel8086 {
                 res = sub(w, src, 1, SF | ZF);
                 setRM(w, mod, rm, res);
                 break;
+            case 0b010: // CALL
+                push(ip);
+                ip = src;
+                break;
+            case 0b011: // CALL
+                push(cs);
+                push(ip);
+                dst = getEA(mod, rm);
+                ip = memory[dst + 1] << 8 | memory[dst];
+                cs = memory[dst + 3] << 8 | memory[dst + 2];
+                break;
+            case 0b100: // JMP
+                ip = src;
+                break;
+            case 0b101: // JMP
+                dst = getEA(mod, rm);
+                ip = memory[dst + 1] << 8 | memory[dst];
+                cs = memory[dst + 3] << 8 | memory[dst + 2];
+                break;
             case 0b110: // PUSH
                 push(src);
                 break;
             }
             break;
-
-        case 0xc3:
-            return false;
         }
         return true;
     }
