@@ -14,7 +14,7 @@ public class Test {
         for (int i = 0; i < bin.length; i++)
             code[i] = bin[i];
         code[bin.length] = 0xc3;
-        cpu.load(0, code);
+        cpu.load(code);
         setRegister("ip", 0);
         cpu.execute();
     }

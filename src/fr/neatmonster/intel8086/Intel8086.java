@@ -1,5 +1,9 @@
 package fr.neatmonster.intel8086;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
 /**
  * The 8086 CPU is characterized by:
  * - a standard operating speed of 5 MHz (200 ns a cycle time).
@@ -42,6 +46,30 @@ package fr.neatmonster.intel8086;
  * cycle before honoring the EU's request.
  */
 public class Intel8086 {
+    /**
+     * Entry point. For now it executes a little test program.
+     */
+    public static void main(final String[] args) {
+        // Instantiate a new CPU.
+        final Intel8086 cpu = new Intel8086();
+        // Reset the CPU.
+        cpu.reset();
+        try {
+            // Try reading test file.
+            final byte[] bs = Files.readAllBytes(Paths.get("codegolf"));
+            // Convert bytes to integers.
+            final int[] bin = new int[bs.length];
+            for (int i = 0; i < bs.length; ++i)
+                bin[i] = bs[i];
+            // Load instructions.
+            cpu.load(bin);
+            // Execute all instructions.
+            cpu.execute();
+        } catch (final IOException e) {
+            e.printStackTrace();
+        }
+    }
+
     /**
      * CF (carry flag)
      *
@@ -517,7 +545,7 @@ public class Intel8086 {
      * @return the result
      */
     private int add(final int w, final int dst, final int src, final int flags) {
-        final int res = dst + src;
+        int res = dst + src;
 
         // Carry Flag
         if ((flags & CF) == CF) {
@@ -526,6 +554,8 @@ public class Intel8086 {
             else
                 this.flags &= ~CF;
         }
+
+        res &= w == 0b0 ? 0xff : 0xffff;
 
         // Zero Flag
         if ((flags & ZF) == ZF) {
@@ -543,7 +573,7 @@ public class Intel8086 {
                 this.flags &= ~SF;
         }
 
-        return res & (w == 0b0 ? 0xff : 0xffff);
+        return res;
     }
 
    /**
@@ -560,7 +590,7 @@ public class Intel8086 {
     * @return the result
     */
    private int and(final int w, final int dst, final int src, final int flags) {
-       final int res = dst & src;
+       final int res = (dst & src) & (w == 0b0 ? 0xff : 0xffff);
 
        // Carry Flag
        if ((flags & CF) == CF)
@@ -582,7 +612,7 @@ public class Intel8086 {
                this.flags &= ~SF;
        }
 
-       return res & (w == 0b0 ? 0xff : 0xffff);
+       return res;
    }
 
     /**
@@ -598,7 +628,8 @@ public class Intel8086 {
         // Decode first byte.
         op = queue[0] >>> 2 & 0b111111;
         d = queue[0] >>> 1 & 0b1;
-        w = queue[0] & 0b1;
+        w = queue[0] & 0b1; 
+        ++ip; // Don't forget to inc. IP.
 
         int dst, src, res = 0;
         switch (queue[0]) {
@@ -640,9 +671,9 @@ public class Intel8086 {
             decode();
             switch (reg) {
             case 0b000:
-                src = memory[++ip];
+                src = memory[ip++];
                 if (w == 0b1)
-                    src |= memory[++ip] << 8;
+                    src |= memory[ip++] << 8;
                 setRM(w, mod, rm, src);
             }
             break;
@@ -666,17 +697,17 @@ public class Intel8086 {
         case 0xbf: // MOV DI,IMMED16
             w = queue[0] >> 3 & 0b1;
             reg = queue[0] & 0b111;
-            src = memory[++ip];
+            src = memory[ip++];
             if (w == 0b1)
-                src |= memory[++ip] << 8;
+                src |= memory[ip++] << 8;
             setReg(w, reg, src);
             break;
 
         // Memory to Accumulator
         case 0xa0: // MOV AL,MEM8
         case 0xa1: // MOV AX,MEM16
-            dst = memory[++ip];
-            dst |= memory[++ip] << 8;
+            dst = memory[ip++];
+            dst |= memory[ip++] << 8;
             src = memory[dst];
             if (w == 0b1)
                 src |= memory[dst + 1] << 8;
@@ -686,8 +717,8 @@ public class Intel8086 {
         // Accumulator to Memory
         case 0xa2: // MOV MEM8,AL
         case 0xa3: // MOV MEM16,AX
-            dst = memory[++ip];
-            dst |= memory[++ip] << 8;
+            dst = memory[ip++];
+            dst |= memory[ip++] << 8;
             src = getReg(w, 0b000);
             memory[dst] = src & 0xff;
             if (w == 0b1)
@@ -917,9 +948,9 @@ public class Intel8086 {
         case 0x04: // ADD AL,IMMED8
         case 0x05: // ADD AX,IMMED16
             dst = getReg(w, 0);
-            src = memory[++ip];
+            src = memory[ip++];
             if (w == 0b1)
-                src |= memory[++ip] << 8;
+                src |= memory[ip++] << 8;
             res = add(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -960,9 +991,9 @@ public class Intel8086 {
         case 0x14: // ADC AL,IMMED8
         case 0X15: // ADC AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[++ip];
+            src = memory[ip++];
             if (w == 0b1)
-                src |= memory[++ip] << 8;
+                src |= memory[ip++] << 8;
             if ((flags & CF) == CF)
                 ++dst;
             res = add(w, dst, src, CF | SF | ZF);
@@ -1024,9 +1055,9 @@ public class Intel8086 {
         case 0x2c: // SUB AL,IMMED8
         case 0x2d: // SUB AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[++ip];
+            src = memory[ip++];
             if (w == 0b1)
-                src |= memory[++ip] << 8;
+                src |= memory[ip++] << 8;
             res = sub(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -1068,9 +1099,9 @@ public class Intel8086 {
         case 0x1c: // SBB AL,IMMED8
         case 0X1d: // SBB AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[++ip];
+            src = memory[ip++];
             if (w == 0b1)
-                src |= memory[++ip] << 8;
+                src |= memory[ip++] << 8;
             if ((flags & CF) == CF)
                 --dst;
             res = sub(w, dst, src, CF | SF | ZF);
@@ -1131,9 +1162,9 @@ public class Intel8086 {
         case 0x3c: // CMP AL,IMMED8
         case 0x3d: // CMP AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[++ip];
+            src = memory[ip++];
             if (w == 0b1)
-                src |= memory[++ip] << 8;
+                src |= memory[ip++] << 8;
             sub(w, dst, src, CF | SF | ZF);
             break;
 
@@ -1194,9 +1225,9 @@ public class Intel8086 {
         case 0x24: // AND AL,IMMED8
         case 0x25: // AND AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[++ip];
+            src = memory[ip++];
             if (w == 0b1)
-                src |= memory[++ip] << 8;
+                src |= memory[ip++] << 8;
             res = and(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -1231,9 +1262,9 @@ public class Intel8086 {
         case 0x0c: // OR AL,IMMED8
         case 0x0d: // OR AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[++ip];
+            src = memory[ip++];
             if (w == 0b1)
-                src |= memory[++ip] << 8;
+                src |= memory[ip++] << 8;
             res = or(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -1269,9 +1300,9 @@ public class Intel8086 {
         case 0x34: // XOR AL,IMMED8
         case 0x35: // XOR AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[++ip];
+            src = memory[ip++];
             if (w == 0b1)
-                src |= memory[++ip] << 8;
+                src |= memory[ip++] << 8;
             res = xor(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -1363,8 +1394,8 @@ public class Intel8086 {
          */
         // Direct with Segment
         case 0xe8: // CALL NEAR-PROC
-            dst = memory[++ip];
-            dst |= memory[++ip] << 8;
+            dst = memory[ip++];
+            dst |= memory[ip++] << 8;
             // Unsigned to signed.
             dst = dst << 16 >> 16;
             push(ip);
@@ -1373,10 +1404,10 @@ public class Intel8086 {
 
         // Direct Intersegment
         case 0x9a: // CALL FAR-PROC
-            dst = memory[++ip];
-            dst |= memory[++ip] << 8;
-            src = memory[++ip];
-            src |= memory[++ip] << 8;
+            dst = memory[ip++];
+            dst |= memory[ip++] << 8;
+            src = memory[ip++];
+            src |= memory[ip++] << 8;
             push(cs);
             push(ip);
             ip = dst;
@@ -1406,8 +1437,8 @@ public class Intel8086 {
 
         // Within Seg Adding Immed to SP
         case 0xc2: // RET IMMED16 (intraseg)
-            src = memory[++ip];
-            src |= memory[++ip] << 8;
+            src = memory[ip++];
+            src |= memory[ip++] << 8;
             ip = pop();
             sp += src;
             break;
@@ -1420,8 +1451,8 @@ public class Intel8086 {
 
         // Intersegment Adding Immediate to SP
         case 0xca: // RET IMMED16 (intersegment)
-            src = memory[++ip];
-            src |= memory[++ip] << 8;
+            src = memory[ip++];
+            src |= memory[ip++] << 8;
             ip = pop();
             cs = pop();
             sp += src;
@@ -1462,8 +1493,8 @@ public class Intel8086 {
          */
         // Direct within Segment
         case 0xe9: // JMP NEAR-LABEL
-            dst = memory[++ip];
-            dst |= memory[++ip] << 8;
+            dst = memory[ip++];
+            dst |= memory[ip++] << 8;
             // Unsigned to signed.
             dst = dst << 16 >> 16;
             ip += dst;
@@ -1471,7 +1502,7 @@ public class Intel8086 {
 
         // Direct within Segment-Short
         case 0xeb: // JMP SHORT-LABEL
-            dst = memory[++ip];
+            dst = memory[ip++];
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             ip += dst;
@@ -1479,10 +1510,10 @@ public class Intel8086 {
 
         // Direct Intersegment
         case 0xea: // JMP FAR-LABEL
-            dst = memory[++ip];
-            dst |= memory[++ip] << 8;
-            src = memory[++ip];
-            src |= memory[++ip] << 8;
+            dst = memory[ip++];
+            dst |= memory[ip++] << 8;
+            src = memory[ip++];
+            src |= memory[ip++] << 8;
             ip = dst;
             cs = src;
             break;
@@ -1511,7 +1542,7 @@ public class Intel8086 {
          * Jump if equal/zero - ZF=1.
          */
         case 0x74: // JE/JZ SHORT-LABEL
-            dst = memory[++ip];
+            dst = memory[ip++];
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & ZF) == ZF)
@@ -1524,7 +1555,7 @@ public class Intel8086 {
          * Jump if below/not above or equal/carry - CF=1.
          */
         case 0x72: // JB/JNAE/JC SHORT-LABEL
-            dst = memory[++ip];
+            dst = memory[ip++];
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & CF) == CF)
@@ -1537,7 +1568,7 @@ public class Intel8086 {
          * Jump if below or equal/not above - (CF or ZF)=1.
          */
         case 0x76: // JBE/JNA SHORT-LABEL
-            dst = memory[++ip];
+            dst = memory[ip++];
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & CF) == CF || (flags & ZF) == ZF)
@@ -1550,7 +1581,7 @@ public class Intel8086 {
          * Jump if sign - SF=1.
          */
         case 0x78: // JS SHORT-LABEL
-            dst = memory[++ip];
+            dst = memory[ip++];
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & SF) == SF)
@@ -1563,7 +1594,7 @@ public class Intel8086 {
          * Jump if not equal/not zero - ZF=0.
          */
         case 0x75: // JNE/JNZ SHORT-LABEL
-            dst = memory[++ip];
+            dst = memory[ip++];
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & ZF) != ZF)
@@ -1576,7 +1607,7 @@ public class Intel8086 {
          * Jump if not below/above or equal - CF=0.
          */
         case 0x73: // JNE/JNZ SHORT-LABEL
-            dst = memory[++ip];
+            dst = memory[ip++];
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & CF) != CF)
@@ -1589,10 +1620,10 @@ public class Intel8086 {
          * Jump if not below nor equal/above - (CF or ZF)=0.
          */
         case 0x77: // JNBE/JA SHORT-LABEL
-            dst = memory[++ip];
+            dst = memory[ip++];
             // Unsigned to signed.
             dst = dst << 24 >> 24;
-            if ((flags & CF) != CF || (flags & ZF) != ZF)
+            if ((flags & CF) != CF && (flags & ZF) != ZF)
                 ip += dst;
             break;
 
@@ -1602,7 +1633,7 @@ public class Intel8086 {
          * Jump if not sign - SF=0.
          */
         case 0x79: // JNS SHORT-LABEL
-            dst = memory[++ip];
+            dst = memory[ip++];
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & SF) != SF)
@@ -1636,7 +1667,7 @@ public class Intel8086 {
         /*
          * STC
          *
-         * STC (Set Carry flag) sets CF to 1 and afffects no other flags.
+         * STC (Set Carry flag) sets CF to 1 and affects no other flags.
          */
         case 0xf9:
             flags |= CF;
@@ -1669,7 +1700,7 @@ public class Intel8086 {
          * any flags.
          */
         case 0x90: // NOP
-            break; 
+            break;
 
         /*
          * Extensions
@@ -1707,9 +1738,9 @@ public class Intel8086 {
             // CMP REG16/MEM16,IMMED8
             decode();
             dst = getRM(w, mod, rm);
-            src = memory[++ip];
+            src = memory[ip++];
             if (queue[0] == 0x81)
-                src |= memory[++ip] << 8;
+                src |= memory[ip++] << 8;
             // Perform sign extension if needed.
             else if (queue[0] == 0x83 && (src & 0x80) == 0x80)
                 src |= 0xff00;
@@ -1860,8 +1891,15 @@ public class Intel8086 {
      * Execute all instructions.
      */
     public void execute() {
-        while (cycle())
-            ++ip; // Next instruction
+        while (cycle()) {
+            for (int y = 0; y < 25; y++)
+                for (int x = 0; x < 80; x++) {
+                    final char ch = (char) memory[0x8000 + y * 80 + x];
+                    System.out.print(ch == 0 ? " " : ch);
+                    if (x == 79)
+                        System.out.println("");
+                }
+        }
     }
 
     /**
@@ -2153,14 +2191,12 @@ public class Intel8086 {
     /**
      * Loads a binary file into memory at the specified address.
      *
-     * @param addr
-     *            the address
      * @param bin
      *            the binary file
      */
-    public void load(final int addr, final int[] bin) {
+    public void load(final int[] bin) {
         for (int i = 0; i < bin.length; i++)
-            memory[addr + i] = bin[i] & 0xff;
+            memory[i] = bin[i] & 0xff;
     }
 
     /**
@@ -2177,7 +2213,7 @@ public class Intel8086 {
      * @return the result
      */
     private int or(final int w, final int dst, final int src, final int flags) {
-        final int res = dst | src;
+        final int res = (dst | src) & (w == 0b0 ? 0xff : 0xffff);
 
         // Carry Flag
         if ((flags & CF) == CF)
@@ -2199,7 +2235,7 @@ public class Intel8086 {
                 this.flags &= ~SF;
         }
 
-        return res & (w == 0b0 ? 0xff : 0xffff);
+        return res;
     }
 
     /**
@@ -2417,6 +2453,8 @@ public class Intel8086 {
                 this.flags &= ~CF;
         }
 
+        res &= w == 0b0 ? 0xff : 0xffff;
+
         // Zero Flag
         if ((flags & ZF) == ZF) {
             if (res == 0)
@@ -2433,7 +2471,7 @@ public class Intel8086 {
                 this.flags &= ~SF;
         }
 
-        return res & (w == 0b0 ? 0xff : 0xffff);
+        return res;
     }
 
     /**
@@ -2450,7 +2488,7 @@ public class Intel8086 {
      * @return the result
      */
     private int xor(final int w, final int dst, final int src, final int flags) {
-        final int res = dst ^ src;
+        final int res = (dst ^ src) & (w == 0b0 ? 0xff : 0xffff);
 
         // Carry Flag
         if ((flags & CF) == CF)
@@ -2472,6 +2510,6 @@ public class Intel8086 {
                 this.flags &= ~SF;
         }
 
-        return res & (w == 0b0 ? 0xff : 0xffff);
+        return res;
     }
 }
