@@ -792,8 +792,6 @@ public class Intel8086 {
             break;
 
         // Register with Accumulator
-        case 0x90: // NOP
-            break;
         case 0x91: // XCHG AX,CX
         case 0x92: // XCHG AX,DX
         case 0x93: // XCHG AX,BX
@@ -1488,6 +1486,190 @@ public class Intel8086 {
             ip = dst;
             cs = src;
             break;
+
+        /*
+         * Conditional Transfers
+         *
+         * The conditional transfer instructions are jumps that may or may not
+         * transfer control depending on the state of the CPU flags at the time
+         * the instruction is executed. The 18 instructions each test a
+         * different combination of flags for a conditional. If the condition
+         * is "true," then control is transferred to the target specified in
+         * the instruction. If the condition is "false," then control passes to
+         * the instruction that follows the conditional jump. All conditional
+         * jumps are SHORT, that is, the target must be in the current code
+         * segment and within -128 to +127 bytes of the first byte of the next
+         * instruction (JMP 00H jumps to the first byte of the next
+         * instruction). Since the jump is made by adding the relative
+         * displacement of the target to the instruction pointer, all
+         * conditional jumps are self-relative and are appropriate for
+         * position-independent routines.
+         */
+        /*
+         * JE/JZ
+         *
+         * Jump if equal/zero - ZF=1.
+         */
+        case 0x74: // JE/JZ SHORT-LABEL
+            dst = memory[++ip];
+            // Unsigned to signed.
+            dst = dst << 24 >> 24;
+            if ((flags & ZF) == ZF)
+                ip += dst;
+            break;
+
+        /*
+         * JB/JNAE/JC
+         *
+         * Jump if below/not above or equal/carry - CF=1.
+         */
+        case 0x72: // JB/JNAE/JC SHORT-LABEL
+            dst = memory[++ip];
+            // Unsigned to signed.
+            dst = dst << 24 >> 24;
+            if ((flags & CF) == CF)
+                ip += dst;
+            break;
+
+        /*
+         * JBE/JNA
+         *
+         * Jump if below or equal/not above - (CF or ZF)=1.
+         */
+        case 0x76: // JBE/JNA SHORT-LABEL
+            dst = memory[++ip];
+            // Unsigned to signed.
+            dst = dst << 24 >> 24;
+            if ((flags & CF) == CF || (flags & ZF) == ZF)
+                ip += dst;
+            break;
+
+        /*
+         * JS
+         *
+         * Jump if sign - SF=1.
+         */
+        case 0x78: // JS SHORT-LABEL
+            dst = memory[++ip];
+            // Unsigned to signed.
+            dst = dst << 24 >> 24;
+            if ((flags & SF) == SF)
+                ip += dst;
+            break;
+
+        /*
+         * JNE/JNZ
+         *
+         * Jump if not equal/not zero - ZF=0.
+         */
+        case 0x75: // JNE/JNZ SHORT-LABEL
+            dst = memory[++ip];
+            // Unsigned to signed.
+            dst = dst << 24 >> 24;
+            if ((flags & ZF) != ZF)
+                ip += dst;
+            break;
+
+        /*
+         * JNB/JAE
+         *
+         * Jump if not below/above or equal - CF=0.
+         */
+        case 0x73: // JNE/JNZ SHORT-LABEL
+            dst = memory[++ip];
+            // Unsigned to signed.
+            dst = dst << 24 >> 24;
+            if ((flags & CF) != CF)
+                ip += dst;
+            break;
+
+        /*
+         * JNBE/JA
+         *
+         * Jump if not below nor equal/above - (CF or ZF)=0.
+         */
+        case 0x77: // JNBE/JA SHORT-LABEL
+            dst = memory[++ip];
+            // Unsigned to signed.
+            dst = dst << 24 >> 24;
+            if ((flags & CF) != CF || (flags & ZF) != ZF)
+                ip += dst;
+            break;
+
+        /*
+         * JNS
+         *
+         * Jump if not sign - SF=0.
+         */
+        case 0x79: // JNS SHORT-LABEL
+            dst = memory[++ip];
+            // Unsigned to signed.
+            dst = dst << 24 >> 24;
+            if ((flags & SF) != SF)
+                ip += dst;
+            break;
+
+        /*
+         * Processor Control Instructions
+         *
+         * These instructions allow programs to control various CPU functions.
+         * One group of instructions updates flags, and another group is used
+         * primarily for synchronizing the 8086 with external events. A final
+         * instruction causes the CPU to do nothing. Except for the flag
+         * operations, none of the processor control instructions affect the
+         * flags.
+         */
+        /*
+         * Flag Operations
+         */
+        /*
+         * CLC
+         *
+         * CLC (Clear Carry flag) zeroes the carry flag (CF) and affects no
+         * other flags. It (and CMC and STC) is useful in conjunction with the
+         * RCL and RCR instructions.
+         */
+        case 0xf8:
+            flags &= ~CF;
+            break;
+
+        /*
+         * STC
+         *
+         * STC (Set Carry flag) sets CF to 1 and afffects no other flags.
+         */
+        case 0xf9:
+            flags |= CF;
+            break;
+
+        /*
+         * External Synchronization
+         */
+        /*
+         * HLT
+         *
+         * HLT (Halt) causes the 8086 to enter the halt state. The processor
+         * leaves the halt state upon activation of the RESET line, upon
+         * receipt of a non-maskable interrupt request on NMI, or, if
+         * interrupts are enabled, upon receipt of a maskable interrupt request
+         * on INTR. HLT does not affect any flags. It may be used as an
+         * alternative to an endless software loop in situations where a
+         * program must wait for an interrupt.
+         */
+        case 0xf4: // HLT
+            return false;
+
+        /*
+         * No Operation
+         */
+        /*
+         * NOP
+         *
+         * NOP (No Operation) causes the CPU to do nothing. NOP does not affect
+         * any flags.
+         */
+        case 0x90: // NOP
+            break; 
 
         /*
          * Extensions
