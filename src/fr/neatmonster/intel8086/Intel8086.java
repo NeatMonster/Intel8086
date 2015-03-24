@@ -330,6 +330,13 @@ public class Intel8086 {
     private int              es;
 
     /**
+     * OS (overridden segment)
+     *
+     * The OS register contains the overridden segment.
+     */
+    private int              os;
+
+    /**
      * IP (instruction pointer)
      *
      * The 16-bit instruction pointer (IP) is updated by the BIU so that it
@@ -621,9 +628,29 @@ public class Intel8086 {
      * @return has more instructions?
      */
     private boolean cycle() {
+        // Segment prefix check.
+        switch (getMem(ip++)) {
+        case 0x26: // ES: (segment override prefix)
+            os = es;
+            break;
+        case 0x2e: // CS: (segment override prefix)
+            os = cs;
+            break;
+        case 0x36: // SS: (segment override prefix)
+            os = ss;
+            break;
+        case 0x3e: // DS: (segment override prefix)
+            os = ds;
+            break;
+        default:
+            os = ds;
+            ip--;
+            break;
+        }
+
         // Fetch instruction from memory.
         for (int i = 0; i < 6; i++)
-            queue[i] = memory[ip + i];
+            queue[i] = getMem(ip + i);
 
         // Decode first byte.
         op = queue[0] >>> 2 & 0b111111;
@@ -671,9 +698,9 @@ public class Intel8086 {
             decode();
             switch (reg) {
             case 0b000:
-                src = memory[ip++];
+                src = getMem(ip++);
                 if (w == 0b1)
-                    src |= memory[ip++] << 8;
+                    src |= getMem(ip++) << 8;
                 setRM(w, mod, rm, src);
             }
             break;
@@ -697,32 +724,32 @@ public class Intel8086 {
         case 0xbf: // MOV DI,IMMED16
             w = queue[0] >> 3 & 0b1;
             reg = queue[0] & 0b111;
-            src = memory[ip++];
+            src = getMem(ip++);
             if (w == 0b1)
-                src |= memory[ip++] << 8;
+                src |= getMem(ip++) << 8;
             setReg(w, reg, src);
             break;
 
         // Memory to Accumulator
         case 0xa0: // MOV AL,MEM8
         case 0xa1: // MOV AX,MEM16
-            dst = memory[ip++];
-            dst |= memory[ip++] << 8;
-            src = memory[dst];
+            dst = getMem(ip++);
+            dst |= getMem(ip++) << 8;
+            src = getMem(os, dst);
             if (w == 0b1)
-                src |= memory[dst + 1] << 8;
+                src |= getMem(os, dst + 1) << 8;
             setReg(w, 0b000, src);
             break;
 
         // Accumulator to Memory
         case 0xa2: // MOV MEM8,AL
         case 0xa3: // MOV MEM16,AX
-            dst = memory[ip++];
-            dst |= memory[ip++] << 8;
+            dst = getMem(ip++);
+            dst |= getMem(ip++) << 8;
             src = getReg(w, 0b000);
-            memory[dst] = src & 0xff;
+            setMem(os, dst, src & 0xff);
             if (w == 0b1)
-                memory[dst + 1] = src >>> 8 & 0xff;
+                setMem(os, dst + 1, src >>> 8 & 0xff);
             break;
 
         // Register/Memory to Segment Register
@@ -948,9 +975,9 @@ public class Intel8086 {
         case 0x04: // ADD AL,IMMED8
         case 0x05: // ADD AX,IMMED16
             dst = getReg(w, 0);
-            src = memory[ip++];
+            src = getMem(ip++);
             if (w == 0b1)
-                src |= memory[ip++] << 8;
+                src |= getMem(ip++) << 8;
             res = add(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -991,9 +1018,9 @@ public class Intel8086 {
         case 0x14: // ADC AL,IMMED8
         case 0X15: // ADC AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[ip++];
+            src = getMem(ip++);
             if (w == 0b1)
-                src |= memory[ip++] << 8;
+                src |= getMem(ip++) << 8;
             if ((flags & CF) == CF)
                 ++dst;
             res = add(w, dst, src, CF | SF | ZF);
@@ -1055,9 +1082,9 @@ public class Intel8086 {
         case 0x2c: // SUB AL,IMMED8
         case 0x2d: // SUB AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[ip++];
+            src = getMem(ip++);
             if (w == 0b1)
-                src |= memory[ip++] << 8;
+                src |= getMem(ip++) << 8;
             res = sub(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -1099,9 +1126,9 @@ public class Intel8086 {
         case 0x1c: // SBB AL,IMMED8
         case 0X1d: // SBB AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[ip++];
+            src = getMem(ip++);
             if (w == 0b1)
-                src |= memory[ip++] << 8;
+                src |= getMem(ip++) << 8;
             if ((flags & CF) == CF)
                 --dst;
             res = sub(w, dst, src, CF | SF | ZF);
@@ -1162,9 +1189,9 @@ public class Intel8086 {
         case 0x3c: // CMP AL,IMMED8
         case 0x3d: // CMP AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[ip++];
+            src = getMem(ip++);
             if (w == 0b1)
-                src |= memory[ip++] << 8;
+                src |= getMem(ip++) << 8;
             sub(w, dst, src, CF | SF | ZF);
             break;
 
@@ -1225,9 +1252,9 @@ public class Intel8086 {
         case 0x24: // AND AL,IMMED8
         case 0x25: // AND AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[ip++];
+            src = getMem(ip++);
             if (w == 0b1)
-                src |= memory[ip++] << 8;
+                src |= getMem(ip++) << 8;
             res = and(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -1262,9 +1289,9 @@ public class Intel8086 {
         case 0x0c: // OR AL,IMMED8
         case 0x0d: // OR AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[ip++];
+            src = getMem(ip++);
             if (w == 0b1)
-                src |= memory[ip++] << 8;
+                src |= getMem(ip++) << 8;
             res = or(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -1300,9 +1327,9 @@ public class Intel8086 {
         case 0x34: // XOR AL,IMMED8
         case 0x35: // XOR AX,IMMED16
             dst = getReg(w, 0b000);
-            src = memory[ip++];
+            src = getMem(ip++);
             if (w == 0b1)
-                src |= memory[ip++] << 8;
+                src |= getMem(ip++) << 8;
             res = xor(w, dst, src, CF | SF | ZF);
             setReg(w, 0b000, res);
             break;
@@ -1394,8 +1421,8 @@ public class Intel8086 {
          */
         // Direct with Segment
         case 0xe8: // CALL NEAR-PROC
-            dst = memory[ip++];
-            dst |= memory[ip++] << 8;
+            dst = getMem(ip++);
+            dst |= getMem(ip++) << 8;
             // Unsigned to signed.
             dst = dst << 16 >> 16;
             push(ip);
@@ -1404,10 +1431,10 @@ public class Intel8086 {
 
         // Direct Intersegment
         case 0x9a: // CALL FAR-PROC
-            dst = memory[ip++];
-            dst |= memory[ip++] << 8;
-            src = memory[ip++];
-            src |= memory[ip++] << 8;
+            dst = getMem(ip++);
+            dst |= getMem(ip++) << 8;
+            src = getMem(ip++);
+            src |= getMem(ip++) << 8;
             push(cs);
             push(ip);
             ip = dst;
@@ -1437,8 +1464,8 @@ public class Intel8086 {
 
         // Within Seg Adding Immed to SP
         case 0xc2: // RET IMMED16 (intraseg)
-            src = memory[ip++];
-            src |= memory[ip++] << 8;
+            src = getMem(ip++);
+            src |= getMem(ip++) << 8;
             ip = pop();
             sp += src;
             break;
@@ -1451,8 +1478,8 @@ public class Intel8086 {
 
         // Intersegment Adding Immediate to SP
         case 0xca: // RET IMMED16 (intersegment)
-            src = memory[ip++];
-            src |= memory[ip++] << 8;
+            src = getMem(ip++);
+            src |= getMem(ip++) << 8;
             ip = pop();
             cs = pop();
             sp += src;
@@ -1493,8 +1520,8 @@ public class Intel8086 {
          */
         // Direct within Segment
         case 0xe9: // JMP NEAR-LABEL
-            dst = memory[ip++];
-            dst |= memory[ip++] << 8;
+            dst = getMem(ip++);
+            dst |= getMem(ip++) << 8;
             // Unsigned to signed.
             dst = dst << 16 >> 16;
             ip += dst;
@@ -1502,7 +1529,7 @@ public class Intel8086 {
 
         // Direct within Segment-Short
         case 0xeb: // JMP SHORT-LABEL
-            dst = memory[ip++];
+            dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             ip += dst;
@@ -1510,10 +1537,10 @@ public class Intel8086 {
 
         // Direct Intersegment
         case 0xea: // JMP FAR-LABEL
-            dst = memory[ip++];
-            dst |= memory[ip++] << 8;
-            src = memory[ip++];
-            src |= memory[ip++] << 8;
+            dst = getMem(ip++);
+            dst |= getMem(ip++) << 8;
+            src = getMem(ip++);
+            src |= getMem(ip++) << 8;
             ip = dst;
             cs = src;
             break;
@@ -1542,7 +1569,7 @@ public class Intel8086 {
          * Jump if equal/zero - ZF=1.
          */
         case 0x74: // JE/JZ SHORT-LABEL
-            dst = memory[ip++];
+            dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & ZF) == ZF)
@@ -1555,7 +1582,7 @@ public class Intel8086 {
          * Jump if below/not above or equal/carry - CF=1.
          */
         case 0x72: // JB/JNAE/JC SHORT-LABEL
-            dst = memory[ip++];
+            dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & CF) == CF)
@@ -1568,7 +1595,7 @@ public class Intel8086 {
          * Jump if below or equal/not above - (CF or ZF)=1.
          */
         case 0x76: // JBE/JNA SHORT-LABEL
-            dst = memory[ip++];
+            dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & CF) == CF || (flags & ZF) == ZF)
@@ -1581,7 +1608,7 @@ public class Intel8086 {
          * Jump if sign - SF=1.
          */
         case 0x78: // JS SHORT-LABEL
-            dst = memory[ip++];
+            dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & SF) == SF)
@@ -1594,7 +1621,7 @@ public class Intel8086 {
          * Jump if not equal/not zero - ZF=0.
          */
         case 0x75: // JNE/JNZ SHORT-LABEL
-            dst = memory[ip++];
+            dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & ZF) != ZF)
@@ -1607,7 +1634,7 @@ public class Intel8086 {
          * Jump if not below/above or equal - CF=0.
          */
         case 0x73: // JNE/JNZ SHORT-LABEL
-            dst = memory[ip++];
+            dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & CF) != CF)
@@ -1620,7 +1647,7 @@ public class Intel8086 {
          * Jump if not below nor equal/above - (CF or ZF)=0.
          */
         case 0x77: // JNBE/JA SHORT-LABEL
-            dst = memory[ip++];
+            dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & CF) != CF && (flags & ZF) != ZF)
@@ -1633,7 +1660,7 @@ public class Intel8086 {
          * Jump if not sign - SF=0.
          */
         case 0x79: // JNS SHORT-LABEL
-            dst = memory[ip++];
+            dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
             if ((flags & SF) != SF)
@@ -1738,9 +1765,9 @@ public class Intel8086 {
             // CMP REG16/MEM16,IMMED8
             decode();
             dst = getRM(w, mod, rm);
-            src = memory[ip++];
+            src = getMem(ip++);
             if (queue[0] == 0x81)
-                src |= memory[ip++] << 8;
+                src |= getMem(ip++) << 8;
             // Perform sign extension if needed.
             else if (queue[0] == 0x83 && (src & 0x80) == 0x80)
                 src |= 0xff00;
@@ -2046,30 +2073,63 @@ public class Intel8086 {
             // 16-bit displacement follows
             disp = queue[3] << 8 | queue[2];
 
+        int ea = 0;
         switch (rm) {
         case 0b000: // EA = (BX) + (SI) + DISP
-            return bh << 8 | bl + si + disp;
+            ea = bh << 8 | bl + si + disp;
+            break;
         case 0b001: // EA = (BX) + (DI) + DISP
-            return bh << 8 | bl + di + disp;
+            ea = bh << 8 | bl + di + disp;
+            break;
         case 0b010: // EA = (BP) + (SI) + DISP
-            return bp + si + disp;
+            ea = bp + si + disp;
+            break;
         case 0b011: // EA = (BP) + (DI) + DISP
-            return bp + di + disp;
+            ea = bp + di + disp;
+            break;
         case 0b100: // EA = (SI) + DISP
-            return si + disp;
+            ea = si + disp;
+            break;
         case 0b101: // EA = (DI) + DISP
-            return di + disp;
+            ea = di + disp;
+            break;
         case 0b110:
             if (mod == 0b00) {
                 // Direct address
-                return queue[3] << 8 | queue[2];
+                ea = queue[3] << 8 | queue[2];
             } else
                 // EA = (BP) + DISP
-                return bp + disp;
+                ea = bp + disp;
+            break;
         case 0b111: // EA = (BX) + DISP
-            return bh << 8 | bl + disp;
+            ea = bh << 8 | bl + disp;
+            break;
         }
-        return 0;
+        return os << 4 | ea & 0xffff;
+    }
+
+    /**
+     * Gets the value at the specified memory address.
+     *
+     * @param ip
+     *            the instruction pointer
+     * @return the value
+     */
+    private int getMem(final int ip) {
+        return getMem(cs, ip);
+    }
+
+    /**
+     * Gets the value at the specified memory address.
+     *
+     * @param seg
+     *            the segment
+     * @param addr
+     *            the address
+     * @return the value
+     */
+    private int getMem(final int seg, final int addr) {
+        return memory[seg << 4 | addr];
     }
 
     /**
@@ -2244,7 +2304,7 @@ public class Intel8086 {
      * @return the value
      */
     private int pop() {
-        final int val = memory[sp + 1] << 8 | memory[sp];
+        final int val = getMem(ss, sp + 1) << 8 | getMem(ss, sp);
         sp += 2;
         return val;
     }
@@ -2257,8 +2317,8 @@ public class Intel8086 {
      */
     private void push(final int val) {
         sp -= 2;
-        memory[sp] = val & 0xff;
-        memory[sp + 1] = val >>> 8 & 0xff;
+        setMem(ss, sp, val & 0xff);
+        setMem(ss, sp + 1, val >>> 8 & 0xff);
     }
 
     /**
@@ -2268,12 +2328,26 @@ public class Intel8086 {
         flags = 0;
         ip = 0x0000;
         sp = 0x0100;
-        cs = 0xffff;
+        //cs = 0xffff;
         ds = 0x0000;
         ss = 0x0000;
         es = 0x0000;
         for (int i = 0; i < 6; i++)
             queue[i] = 0;
+    }
+
+    /**
+     * Sets the value at the specified memory address.
+     *
+     * @param seg
+     *            the segment
+     * @param addr
+     *            the address
+     * @param val
+     *            the new value
+     */
+    private void setMem(final int seg, final int addr, final int val) {
+        memory[seg << 4 | addr] = val;
     }
 
     /**
@@ -2321,26 +2395,22 @@ public class Intel8086 {
         else
             // Word data
             switch (reg) {
-            case 0b000: { // AX
+            case 0b000: // AX
                 al = val & 0xff;
                 ah = val >>> 8 & 0xff;
                 break;
-            }
-            case 0b001: { // CX
+            case 0b001: // CX
                 cl = val & 0xff;
                 ch = val >>> 8 & 0xff;
                 break;
-            }
-            case 0b010: { // DX
+            case 0b010: // DX
                 dl = val & 0xff;
                 dh = val >>> 8 & 0xff;
                 break;
-            }
-            case 0b011: { // BX
+            case 0b011: // BX
                 bl = val & 0xff;
                 bh = val >>> 8 & 0xff;
                 break;
-            }
             case 0b100: // SP
                 sp = val & 0xffff;
                 break;
