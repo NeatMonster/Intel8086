@@ -82,7 +82,7 @@ public class Intel8086 {
      * incorporate the carry flag in their operations and can be used to
      * perform multibyte (e.g., 32-bit, 64-bit) addition and subtraction.
      */
-    private static final int CF     = 1 << 0;
+    private static final int   CF     = 1 << 0;
 
     /**
      * PF (parity flag)
@@ -92,7 +92,7 @@ public class Intel8086 {
      * otherwise it is cleared. PF is provided for 8080/8085 compatibility; it
      * can also be used to check ASCII characters for correct parity.
      */
-    private static final int PF     = 1 << 2;
+    private static final int   PF     = 1 << 2;
 
     /**
      * AF (auxiliary carry flag)
@@ -104,7 +104,7 @@ public class Intel8086 {
      * for the decimal adjust instructions and ordinarily is not used for any
      * other purpose.
      */
-    private static final int AF     = 1 << 4;
+    private static final int   AF     = 1 << 4;
 
     /**
      * ZF (zero flag)
@@ -113,7 +113,7 @@ public class Intel8086 {
      * set; otherwise ZF is cleared. A conditional jump instruction can be used
      * to alter the flow of the program if the result is or is not zero.
      */
-    private static final int ZF     = 1 << 6;
+    private static final int   ZF     = 1 << 6;
 
     /**
      * SF (sign flag)
@@ -127,7 +127,7 @@ public class Intel8086 {
      * unsigned operations typically ignore SF since the high-order bit of the
      * result is interpreted as a digit rather than a sign.
      */
-    private static final int SF     = 1 << 7;
+    private static final int   SF     = 1 << 7;
 
     /**
      * TF (trap flag)
@@ -137,7 +137,7 @@ public class Intel8086 {
      * each instruction, allowing a program to be inspected as it executes
      * instruction by instruction.
      */
-    private static final int TF     = 1 << 8;
+    private static final int   TF     = 1 << 8;
 
     /**
      * IF (interrupt-enable flag)
@@ -146,7 +146,7 @@ public class Intel8086 {
      * requests. Clearing IF disables these interrupts. IF has no affect on
      * either non-maskable external or internally generated interrupts.
      */
-    private static final int IF     = 1 << 9;
+    private static final int   IF     = 1 << 9;
 
     /**
      * DF (direction flag)
@@ -156,7 +156,7 @@ public class Intel8086 {
      * to left". Clearing DF causes string instructions to auto-increment, or
      * to process strings from "left to right."
      */
-    private static final int DF     = 1 << 10;
+    private static final int   DF     = 1 << 10;
 
     /**
      * OF (overflow flag)
@@ -165,9 +165,32 @@ public class Intel8086 {
      * small a negative number to fit in the destination operand (excluding the
      * sign bit), then OF is set; otherwise OF is cleared. OF thus indicates
      * signed arithmetic overflow; it can be tested with a conditional jump or
-     * the INFO (interrumpt on overflow) instruction. OF may be ignored when
+     * the INFO (interrupt on overflow) instruction. OF may be ignored when
      * performing unsigned arithmetic.
      */
+    private static final int   OF     = 1 << 11;
+
+    /**
+     * Lookup table used for setting the parity table.
+     */
+    private static final int[] PARITY = {
+        1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
+        0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
+        0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
+        1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
+        0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
+        1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
+        1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
+        0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
+        0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
+        1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
+        1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
+        0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
+        1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
+        0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
+        0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
+        1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1
+    };
 
     /*
      * General Registers
@@ -200,7 +223,7 @@ public class Intel8086 {
      * AL - Byte Multiply, Byte Divide, Byte I/O, Translate, Decimal Arithmetic
      * AH - Byte Multiply, Byte Divide
      */
-    private int              ah, al;
+    private int                ah, al;
 
     /**
      * CX (count)
@@ -209,7 +232,7 @@ public class Intel8086 {
      * CX - String Operations, Loops
      * CL - Variable Shift and Rotate
      */
-    private int              ch, cl;
+    private int                ch, cl;
 
     /**
      * DX (data)
@@ -217,7 +240,7 @@ public class Intel8086 {
      * Implicit Use:
      * DX - Word Multiply, Word Divide, Indirect I/O
      */
-    private int              dh, dl;
+    private int                dh, dl;
 
     /**
      * BX (base)
@@ -225,7 +248,7 @@ public class Intel8086 {
      * Implicit Use:
      * BX - Translate
      */
-    private int              bh, bl;
+    private int                bh, bl;
 
     /**
      * SP (stack pointer)
@@ -251,7 +274,7 @@ public class Intel8086 {
      * erase them. The top of the stack changes only as the result of updating
      * the stack pointer.
      */
-    private int              sp;
+    private int                sp;
 
     /**
      * BP (base pointer)
@@ -262,7 +285,7 @@ public class Intel8086 {
      * address data on the stack; BP can be sued, however, to access data in
      * any of the other currently addressable segments.
      */
-    private int              bp;
+    private int                bp;
 
     /**
      * SI (source index)
@@ -272,7 +295,7 @@ public class Intel8086 {
      * segment, but another currently addressable segment may be specified. Its
      * offset is taken from the register SI, the source index register.
      */
-    private int              si;
+    private int                si;
 
     /**
      * DI (destination index)
@@ -282,7 +305,7 @@ public class Intel8086 {
      * register. The string instructions automatically adjust SI and DI as they
      * process the string one byte or word at a time.
      */
-    private int              di;
+    private int                di;
 
     /*
      * Segment Registers
@@ -303,7 +326,7 @@ public class Intel8086 {
      * The CS register points to the current code segment; instructions are
      * fetched from this segment.
      */
-    private int              cs;
+    private int                cs;
 
     /**
      * DS (data segment)
@@ -311,7 +334,7 @@ public class Intel8086 {
      * The DS register points to the current data segment; it generally
      * contains program variables.
      */
-    private int              ds;
+    private int                ds;
 
     /**
      * SS (stack segment)
@@ -319,7 +342,7 @@ public class Intel8086 {
      * The SS register points to the current stack segment, stack operations
      * are performed on locations in this segment.
      */
-    private int              ss;
+    private int                ss;
 
     /**
      * ES (extra segment)
@@ -327,14 +350,14 @@ public class Intel8086 {
      * The ES register points to the current extra segment, which is also
      * typically used for data storage.
      */
-    private int              es;
+    private int                es;
 
     /**
      * OS (overridden segment)
      *
      * The OS register contains the overridden segment.
      */
-    private int              os;
+    private int                os;
 
     /**
      * IP (instruction pointer)
@@ -349,7 +372,7 @@ public class Intel8086 {
      * instruction pointer, but instructions cause it to change and to be saved
      * and restored from the stack.
      */
-    private int              ip;
+    private int                ip;
 
     /**
      * Flags
@@ -360,7 +383,7 @@ public class Intel8086 {
      * depending of the state of these flags, that is, on the result of a prior
      * operation. Different instructions affect the status flags differently.
      */
-    private int              flags;
+    private int                flags;
 
     /**
      * Queue
@@ -392,7 +415,7 @@ public class Intel8086 {
      * fetch already in progress is completed before executing the EU's bus
      * request).
      */
-    private final int[]      queue  = new int[6];
+    private final int[]        queue  = new int[6];
 
     /**
      * Memory
@@ -517,7 +540,7 @@ public class Intel8086 {
      * should not use these areas for any other purpose. Doing so may make
      * these systems incompatible with future Intel products.
      */
-    private final int[]      memory = new int[1048576];
+    private final int[]        memory = new int[1048576];
 
     /*
      * Typical 8086 Machine Instruction Format
@@ -526,17 +549,17 @@ public class Intel8086 {
      * | OPCODE | D | W | MOD | REG | R/M | LOW DISP/DATA | HIGH DISP/DATA | LOW DATA | HIGH DATA |
      */
     /** Operation (Instruction) code */
-    private int              op;
+    private int                op;
     /** Direction is to register/Direction is from register */
-    private int              d;
+    private int                d;
     /** Word/Byte operation */
-    private int              w;
+    private int                w;
     /** Register mode/Memory mode with displacement length */
-    private int              mod;
+    private int                mod;
     /** Register operand/Extension of opcode */
-    private int              reg;
+    private int                reg;
     /** Register operand/Registers to use in EA calculation */
-    private int              rm;
+    private int                rm;
 
     /**
      * Performs addition and sets flags accordingly.
@@ -547,38 +570,38 @@ public class Intel8086 {
      *            the first operand
      * @param src
      *            the second operand
-     * @param flags
-     *            the flags to set
+     * @param inc
+     *            should not set carry?
      * @return the result
      */
-    private int add(final int w, final int dst, final int src, final int flags) {
+    private int add(final int w, final int dst, final int src, final boolean inc) {
         int res = dst + src;
 
         // Carry Flag
-        if ((flags & CF) == CF) {
-            if (w == 0b0 && res > 0xff || w == 0b1 && res > 0xffff)
-                this.flags |= CF;
+        if (!inc) {
+            if (w == 0b0 && res > 0xff)
+                flags |= CF;
+            else if (w == 0b1 && res > 0xffff)
+                flags |= CF;
             else
-                this.flags &= ~CF;
+                flags &= ~CF;
         }
 
-        res &= w == 0b0 ? 0xff : 0xffff;
+        // Adjust Flag
+        if (((res ^ dst ^ src) & 0b10) == 0x10)
+            flags |= AF;
+        else
+            flags &= ~AF;
 
-        // Zero Flag
-        if ((flags & ZF) == ZF) {
-            if (res == 0)
-                this.flags |= ZF;
-            else
-                this.flags &= ~ZF;
-        }
+        // Overflow Flag
+        if (w == 0b0 && ((res ^ dst) & (res ^ src) & 0x80) == 0x80)
+            flags |= OF;
+        if (w == 0b1 && ((res ^ dst) & (res ^ src) & 0x8000) == 0x8000)
+            flags |= OF;
+        else
+            flags &= ~OF;
 
-        // Sign Flag
-        if ((flags & SF) == SF) {
-            if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
-                this.flags |= SF;
-            else
-                this.flags &= ~SF;
-        }
+        setFlags(w, res &= w == 0b0 ? 0xff : 0xffff);
 
         return res;
     }
@@ -592,32 +615,18 @@ public class Intel8086 {
     *            the first operand
     * @param src
     *            the second operand
-    * @param flags
-    *            the flags to set
     * @return the result
     */
-   private int and(final int w, final int dst, final int src, final int flags) {
-       final int res = (dst & src) & (w == 0b0 ? 0xff : 0xffff);
+   private int and(final int w, final int dst, final int src) {
+       final int res = dst & src & (w == 0b0 ? 0xff : 0xffff);
 
        // Carry Flag
-       if ((flags & CF) == CF)
-           this.flags &= ~CF;
+       flags &= ~CF;
 
-       // Zero Flag
-       if ((flags & ZF) == ZF) {
-           if (res == 0)
-               this.flags |= ZF;
-           else
-               this.flags &= ~ZF;
-       }
+       // Overflow Flag
+       flags &= ~OF;
 
-       // Sign Flag
-       if ((flags & SF) == SF) {
-           if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
-               this.flags |= SF;
-           else
-               this.flags &= ~SF;
-       }
+       setFlags(w, res);
 
        return res;
    }
@@ -959,7 +968,7 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            res = add(w, dst, src, CF | SF | ZF);
+            res = add(w, dst, src, false);
             setRM(w, mod, rm, res);
             break;
         case 0x02: // ADD REG8,REG8/MEM8
@@ -967,7 +976,7 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            res = add(w, dst, src, CF | SF | ZF);
+            res = add(w, dst, src, false);
             setReg(w, reg, res);
             break;
 
@@ -978,7 +987,7 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            res = add(w, dst, src, CF | SF | ZF);
+            res = add(w, dst, src, false);
             setReg(w, 0b000, res);
             break;
 
@@ -1000,7 +1009,7 @@ public class Intel8086 {
             src = getReg(w, reg);
             if ((flags & CF) == CF)
                 ++dst;
-            res = add(w, dst, src, CF | SF | ZF);
+            res = add(w, dst, src, false);
             setRM(w, mod, rm, res);
             break;
         case 0x12: // ADC REG8,REG8/MEM8
@@ -1010,7 +1019,7 @@ public class Intel8086 {
             src = getRM(w, mod, rm);
             if ((flags & CF) == CF)
                 ++dst;
-            res = add(w, dst, src, CF | SF | ZF);
+            res = add(w, dst, src, false);
             setReg(w, reg, res);
             break;
 
@@ -1023,7 +1032,7 @@ public class Intel8086 {
                 src |= getMem(ip++) << 8;
             if ((flags & CF) == CF)
                 ++dst;
-            res = add(w, dst, src, CF | SF | ZF);
+            res = add(w, dst, src, false);
             setReg(w, 0b000, res);
             break;
 
@@ -1045,7 +1054,7 @@ public class Intel8086 {
         case 0x47: // INC DI
             reg = queue[0] & 0b111;
             src = getReg(0b1, reg);
-            res = add(0b1, src, 1, SF | ZF);
+            res = add(0b1, src, 1, true);
             setReg(0b1, reg, res);
             break;
 
@@ -1066,7 +1075,7 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            res = sub(w, dst, src, CF | SF | ZF);
+            res = sub(w, dst, src, false);
             setRM(w, mod, rm, res);
             break;
         case 0x2a: // SUB REG8,REG8/MEM8
@@ -1074,7 +1083,7 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            res = sub(w, dst, src, CF | SF | ZF);
+            res = sub(w, dst, src, false);
             setReg(w, reg, res);
             break;
 
@@ -1085,7 +1094,7 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            res = sub(w, dst, src, CF | SF | ZF);
+            res = sub(w, dst, src, false);
             setReg(w, 0b000, res);
             break;
 
@@ -1108,7 +1117,7 @@ public class Intel8086 {
             src = getReg(w, reg);
             if ((flags & CF) == CF)
                 --dst;
-            res = sub(w, dst, src, CF | SF | ZF);
+            res = sub(w, dst, src, false);
             setRM(w, mod, rm, res);
             break;
         case 0x1a: // SBB REG8,REG8/MEM8
@@ -1118,7 +1127,7 @@ public class Intel8086 {
             src = getRM(w, mod, rm);
             if ((flags & CF) == CF)
                 --dst;
-            res = sub(w, dst, src, CF | SF | ZF);
+            res = sub(w, dst, src, false);
             setReg(w, reg, res);
             break;
 
@@ -1131,7 +1140,7 @@ public class Intel8086 {
                 src |= getMem(ip++) << 8;
             if ((flags & CF) == CF)
                 --dst;
-            res = sub(w, dst, src, CF | SF | ZF);
+            res = sub(w, dst, src, false);
             setReg(w, 0b000, res);
             break;
 
@@ -1153,7 +1162,7 @@ public class Intel8086 {
         case 0x4f: // DEC DI
             reg = queue[0] & 0b111;
             dst = getReg(0b1, reg);
-            res = sub(0b1, dst, 1, SF | ZF);
+            res = sub(0b1, dst, 1, true);
             setReg(0b1, reg, res);
             break;
 
@@ -1175,14 +1184,14 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            sub(w, dst, src, CF | SF | ZF);
+            sub(w, dst, src, false);
             break;
         case 0x3a: // CMP REG8,REG8/MEM8
         case 0x3b: // CMP REG16,REG16/MEM16
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            sub(w, dst, src, CF | SF | ZF);
+            sub(w, dst, src, false);
             break;
 
         // Immediate with Accumulator
@@ -1192,7 +1201,7 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            sub(w, dst, src, CF | SF | ZF);
+            sub(w, dst, src, false);
             break;
 
         /*
@@ -1236,7 +1245,7 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            res = and(w, dst, src, CF | SF | ZF);
+            res = and(w, dst, src);
             setRM(w, mod, rm, res);
             break;
         case 0x22: // AND REG8,REG8/MEM8
@@ -1244,7 +1253,7 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            res = and(w, dst, src, CF | SF | ZF);
+            res = and(w, dst, src);
             setReg(w, reg, res);
             break;
 
@@ -1255,7 +1264,7 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            res = and(w, dst, src, CF | SF | ZF);
+            res = and(w, dst, src);
             setReg(w, 0b000, res);
             break;
 
@@ -1273,7 +1282,7 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            res = or(w, dst, src, CF | SF | ZF);
+            res = or(w, dst, src);
             setRM(w, mod, rm, res);
             break;
         case 0x0a: // OR REG8,REG8/MEM8
@@ -1281,7 +1290,7 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            res = or(w, dst, src, CF | SF | ZF);
+            res = or(w, dst, src);
             setReg(w, reg, res);
             break;
 
@@ -1292,7 +1301,7 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            res = or(w, dst, src, CF | SF | ZF);
+            res = or(w, dst, src);
             setReg(w, 0b000, res);
             break;
 
@@ -1311,7 +1320,7 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            res = xor(w, dst, src, CF | SF | ZF);
+            res = xor(w, dst, src);
             setRM(w, mod, rm, res);
             break;
         case 0x32: // XOR REG8,REG8/MEM8
@@ -1319,7 +1328,7 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            res = xor(w, dst, src, CF | SF | ZF);
+            res = xor(w, dst, src);
             setReg(w, reg, res);
             break;
 
@@ -1330,7 +1339,7 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            res = xor(w, dst, src, CF | SF | ZF);
+            res = xor(w, dst, src);
             setReg(w, 0b000, res);
             break;
 
@@ -1773,12 +1782,12 @@ public class Intel8086 {
                 src |= 0xff00;
             switch (reg) {
             case 0b000: // ADD
-                res = add(w, dst, src, CF | SF | ZF);
+                res = add(w, dst, src, false);
                 setRM(w, mod, rm, res);
                 break;
             case 0b001: // OR
                 if (queue[0] == 0x80 || queue[0] == 0x81) {
-                    res = or(w, dst, src, CF | SF | ZF);
+                    res = or(w, dst, src);
                     setRM(w, mod, rm, res);
                     break;
                 }
@@ -1786,33 +1795,33 @@ public class Intel8086 {
             case 0b010: // ADC
                 if ((flags & CF) == CF)
                     ++dst;
-                res = add(w, dst, src, CF | SF | ZF);
+                res = add(w, dst, src, false);
                 setRM(w, mod, rm, res);
                 break;
             case 0b011: // SBB
                 if ((flags & CF) == CF)
                     --dst;
-                res = sub(w, dst, src, CF | SF | ZF);
+                res = sub(w, dst, src, false);
                 setRM(w, mod, rm, res);
                 break;
             case 0b100: // AND
                 if (queue[0] == 0x80 || queue[0] == 0x81) {
-                    res = and(w, dst, src, CF | SF | ZF);
+                    res = and(w, dst, src);
                     setRM(w, mod, rm, res);
                 }
                 break;
             case 0b101: // SUB
-                res = sub(w, dst, src, CF | SF | ZF);
+                res = sub(w, dst, src, false);
                 setRM(w, mod, rm, res);
                 break;
             case 0b110: // XOR
                 if (queue[0] == 0x80 || queue[0] == 0x81) {
-                    res = xor(w, dst, src, CF | SF | ZF);
+                    res = xor(w, dst, src);
                     setRM(w, mod, rm, res);
                 }
                 break;
             case 0b111: // CMP
-                sub(w, dst, src, CF | SF | ZF);
+                sub(w, dst, src, false);
                 break;
             }
             break;
@@ -1837,11 +1846,11 @@ public class Intel8086 {
             src = getRM(w, mod, rm);
             switch (reg) {
             case 0b000: // INC
-                res = add(w, src, 1, SF | ZF);
+                res = add(w, src, 1, true);
                 setRM(w, mod, rm, res);
                 break;
             case 0b001: // DEC
-                res = sub(w, src, 1, SF | ZF);
+                res = sub(w, src, 1, true);
                 setRM(w, mod, rm, res);
                 break;
             }
@@ -1860,11 +1869,11 @@ public class Intel8086 {
             src = getRM(w, mod, rm);
             switch (reg) {
             case 0b000: // INC
-                res = add(w, src, 1, SF | ZF);
+                res = add(w, src, 1, true);
                 setRM(w, mod, rm, res);
                 break;
             case 0b001: // DEC
-                res = sub(w, src, 1, SF | ZF);
+                res = sub(w, src, 1, true);
                 setRM(w, mod, rm, res);
                 break;
             case 0b010: // CALL
@@ -2268,32 +2277,18 @@ public class Intel8086 {
      *            the first operand
      * @param src
      *            the second operand
-     * @param flags
-     *            the flags to set
      * @return the result
      */
-    private int or(final int w, final int dst, final int src, final int flags) {
+    private int or(final int w, final int dst, final int src) {
         final int res = (dst | src) & (w == 0b0 ? 0xff : 0xffff);
 
         // Carry Flag
-        if ((flags & CF) == CF)
-            this.flags &= ~CF;
+        flags &= ~CF;
 
-        // Zero Flag
-        if ((flags & ZF) == ZF) {
-            if (res == 0)
-                this.flags |= ZF;
-            else
-                this.flags &= ~ZF;
-        }
+        // Overflow Flag
+        flags &= ~OF;
 
-        // Sign Flag
-        if ((flags & SF) == SF) {
-            if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
-                this.flags |= SF;
-            else
-                this.flags &= ~SF;
-        }
+        setFlags(w, res);
 
         return res;
     }
@@ -2334,6 +2329,36 @@ public class Intel8086 {
         es = 0x0000;
         for (int i = 0; i < 6; i++)
             queue[i] = 0;
+    }
+
+    /**
+     * Sets the parity, zero and sign flags.
+     *
+     * @param w
+     *            word/byte operation
+     * @param res
+     *            the result
+     */
+    private void setFlags(final int w, final int res) {
+        // Parity Flag
+        if (PARITY[res & 0xff] > 0)
+            flags |= PF;
+        else
+            flags &= ~PF;
+
+        // Zero Flag
+        if (res == 0)
+            flags |= ZF;
+        else
+            flags &= ~ZF;
+
+        // Sign Flag
+        if (w == 0b0 && (res & 0x80) > 0)
+            flags |= SF;
+        else if (w == 0b1 && (res & 0x8000) > 0)
+            flags |= SF;
+        else
+            flags &= ~SF;
     }
 
     /**
@@ -2502,11 +2527,11 @@ public class Intel8086 {
      *            the first operand
      * @param src
      *            the second operand
-     * @param flags
-     *            the flags to set
+     * @param dec
+     *            should not set carry?
      * @return the result
      */
-    private int sub(final int w, final int dst, final int src, final int flags) {
+    private int sub(final int w, final int dst, final int src, final boolean dec) {
         int res = dst - src;
 
         // Handle overflow.
@@ -2516,30 +2541,28 @@ public class Intel8086 {
             res += 0x10000;
 
         // Carry Flag
-        if ((flags & CF) == CF) {
+        if (!dec) {
             if (dst < src)
-                this.flags |= CF;
+                flags |= CF;
             else
-                this.flags &= ~CF;
+                flags &= ~CF;
         }
 
-        res &= w == 0b0 ? 0xff : 0xffff;
+        // Adjust Flag
+        if (((res ^ dst ^ src) & 0b10) > 0)
+            flags |= AF;
+        else
+            flags &= ~AF;
 
-        // Zero Flag
-        if ((flags & ZF) == ZF) {
-            if (res == 0)
-                this.flags |= ZF;
-            else
-                this.flags &= ~ZF;
-        }
+        // Overflow Flag
+        if (w == 0b0 && ((res ^ dst) & (dst ^ src) & 0x80) > 0)
+            flags |= OF;
+        if (w == 0b1 && ((res ^ dst) & (dst ^ src) & 0x8000) > 0)
+            flags |= OF;
+        else
+            flags &= ~OF;
 
-        // Sign Flag
-        if ((flags & SF) == SF) {
-            if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
-                this.flags |= SF;
-            else
-                this.flags &= ~SF;
-        }
+        setFlags(w, res &= w == 0b0 ? 0xff : 0xffff);
 
         return res;
     }
@@ -2553,32 +2576,18 @@ public class Intel8086 {
      *            the first operand
      * @param src
      *            the second operand
-     * @param flags
-     *            the flags to set
      * @return the result
      */
-    private int xor(final int w, final int dst, final int src, final int flags) {
+    private int xor(final int w, final int dst, final int src) {
         final int res = (dst ^ src) & (w == 0b0 ? 0xff : 0xffff);
 
         // Carry Flag
-        if ((flags & CF) == CF)
-            this.flags &= ~CF;
+        flags &= ~CF;
 
-        // Zero Flag
-        if ((flags & ZF) == ZF) {
-            if (res == 0)
-                this.flags |= ZF;
-            else
-                this.flags &= ~ZF;
-        }
+        // Overflow Flag
+        flags &= ~OF;
 
-        // Sign Flag
-        if ((flags & SF) == SF) {
-            if (w == 0b0 && (res >> 7 & 0b1) == 0b1 || w == 0b1 && (res >> 15 & 0b1) == 0b1)
-                this.flags |= SF;
-            else
-                this.flags &= ~SF;
-        }
+        setFlags(w, res);
 
         return res;
     }
