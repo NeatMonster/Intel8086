@@ -1201,6 +1201,59 @@ public class Intel8086 {
             break;
 
         /*
+         * AAA
+         *
+         * AAA (ASCII Adjust for Addition) changes the contents of register AL
+         * to a valid unpacked decimal number; the high-order half-byte is
+         * zeroed. AAA updates AF and CF; the content of OF, PF, SF and ZF is
+         * undefined following execution of AAA.
+         */
+        case 0x37: // AAA
+            if ((al & 0xf) > 9 || (flags & AF) == AF) {
+                al += 6;
+                ah = ah + 1 & 0xff;
+                flags |= CF;
+                flags |= AF;
+            } else {
+                flags &= ~CF;
+                flags &= ~AF;
+            }
+            al &= 0xf;
+            break;
+
+        /*
+         * DAA
+         *
+         * DAA (Decimal Adjust for Addition) corrects the result of previously
+         * adding two valid packed decimal operands (the destination operand
+         * must have been register AL). DAA changes the content of AL to a pair
+         * of valid packed decimal digits. It updates AF, CF, PF, SF and ZF;
+         * the content of OF is undefined following execution of DAA.
+         */
+        case 0x27: { // DAA
+            final int oldAL = al;
+            final int oldCF = flags & CF;
+            flags &= ~CF;
+            if ((al & 0xf) > 9 || (flags & AF) == AF) {
+                al += 6;
+                if (oldCF == CF || al < 0)
+                    flags |= CF;
+                else
+                    flags &= ~CF;
+                al &= 0xff;
+                flags |= AF;
+            } else
+                flags &= ~AF;
+            if (oldAL > 0x99 || oldCF == CF) {
+                al = al + 0x60 & 0xff;
+                flags |= CF;
+            } else
+                flags &= ~CF;
+            setFlags(0b0, al);
+            break;
+        }
+
+        /*
          * Subtraction
          */
         /*
@@ -1309,6 +1362,19 @@ public class Intel8086 {
             break;
 
         /*
+         * NEG destination
+         *
+         * NEG (Negate) subtracts the destination operand, which may be a byte
+         * or a word, from 0 and returns the result to the destination. This
+         * forms the two's complement of the number, effectively reversing the
+         * sign of an integer. If the operand is zero, its sign is not changed.
+         * Attempting to negate a byte containing -128 or a word containing
+         * -32,768 causes no change to the operand and sets OF. NEG updates AF,
+         * CF, OF, PF, SF and ZF. CF is always set except when the operand is
+         * zero, in which case it is cleared.
+         */
+
+        /*
          * CMP destination,source
          *
          * CMP (Compare) subtracts the source from the destination, which may
@@ -1345,6 +1411,62 @@ public class Intel8086 {
                 src |= getMem(ip++) << 8;
             sub(w, dst, src, false);
             break;
+
+        /*
+         * AAS
+         *
+         * AAS (ASCII Adjust for Subtraction) corrects the result of a previous
+         * subtraction of two valid unpacked decimal operands (the destination
+         * operand must have been specified as register AL). AAS changes the
+         * content of AL to a valid unpacked decimal number; the high-order
+         * half-byte is zeroed. AAS updates AF and CF; the content of OF, PF,
+         * SF and ZF is undefined following execution of AAS.
+         */
+        case 0x3f: // AAS
+            if ((al & 0xf) > 9 || (flags & AF) == AF) {
+                al -= 6;
+                ah = ah - 1 & 0xff;
+                flags |= CF;
+                flags |= AF;
+            } else {
+                flags &= ~CF;
+                flags &= ~AF;
+            }
+            al &= 0xf;
+            break;
+
+        /*
+         * DAS
+         *
+         * DAS (Decimal Adjust for Subtraction) corrects the result of a
+         * previous subtraction of two valid packed decimal operands (the
+         * destination operand must have been specified as register AL). DAS
+         * changes the content of AL to a pair of valid packed decimal digits.
+         * DAS updates AF, CF, PF, SF and ZF; the content of OF is undefined
+         * following the execution of DAS.
+         */
+        case 0x2f: { // DAS
+            final int oldAL = al;
+            final int oldCF = flags & CF;
+            flags &= ~CF;
+            if ((al & 0xf) > 9 || (flags & AF) == AF) {
+                al -= 6;
+                if (oldCF == CF || (al & 0xff) > 0)
+                    flags |= CF;
+                else
+                    flags &= ~CF;
+                al &= 0xff;
+                flags |= AF;
+            } else
+                flags &= ~AF;
+            if (oldAL > 0x99 || oldCF == CF) {
+                al = al - 0x60 & 0xff;
+                flags |= CF;
+            } else
+                flags &= ~CF;
+            setFlags(0b0, al);
+            break;
+        }
 
         /*
          * Bit Manipulation Instructions
@@ -1723,7 +1845,7 @@ public class Intel8086 {
             dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
-            if ((flags & ZF) == ZF)
+            if ((flags & ZF) > 0)
                 ip += dst;
             break;
 
@@ -1736,7 +1858,7 @@ public class Intel8086 {
             dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
-            if ((flags & CF) == CF)
+            if ((flags & CF) > 0)
                 ip += dst;
             break;
 
@@ -1749,7 +1871,7 @@ public class Intel8086 {
             dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
-            if ((flags & CF) == CF || (flags & ZF) == ZF)
+            if ((flags & CF | flags & ZF) > 0)
                 ip += dst;
             break;
 
@@ -1762,7 +1884,7 @@ public class Intel8086 {
             dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
-            if ((flags & SF) == SF)
+            if ((flags & SF) > 0)
                 ip += dst;
             break;
 
@@ -1775,7 +1897,7 @@ public class Intel8086 {
             dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
-            if ((flags & ZF) != ZF)
+            if ((flags & ZF) == 0)
                 ip += dst;
             break;
 
@@ -1788,7 +1910,7 @@ public class Intel8086 {
             dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
-            if ((flags & CF) != CF)
+            if ((flags & CF) == 0)
                 ip += dst;
             break;
 
@@ -1801,7 +1923,7 @@ public class Intel8086 {
             dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
-            if ((flags & CF) != CF && (flags & ZF) != ZF)
+            if ((flags & CF | flags & ZF) == 0)
                 ip += dst;
             break;
 
@@ -1814,7 +1936,7 @@ public class Intel8086 {
             dst = getMem(ip++);
             // Unsigned to signed.
             dst = dst << 24 >> 24;
-            if ((flags & SF) != SF)
+            if ((flags & SF) == 0)
                 ip += dst;
             break;
 
@@ -1976,6 +2098,25 @@ public class Intel8086 {
             case 0b000: // POP
                 src = pop();
                 setRM(w, mod, rm, src);
+                break;
+            }
+            break;
+
+        // GROUP 3
+        case 0xf6:
+            // NEG REG8/MEM8
+        case 0xf7:
+            // NEG REG16/MEM16
+            decode();
+            src = getRM(w, mod, rm);
+            switch (reg) {
+            case 0b011: // NEG
+                dst = sub(w, 0, src, false);
+                if (dst != 0)
+                    flags |= CF;
+                else
+                    flags &= ~CF;
+                setRM(w, mod, rm, dst);
                 break;
             }
             break;
@@ -2678,9 +2819,9 @@ public class Intel8086 {
 
         // Handle overflow.
         if (w == 0b0 && res < 0)
-            res += 0x100;
+            res &= 0xff;
         else if (w == 0b1 && res < 0)
-            res += 0x10000;
+            res &= 0xffff;
 
         // Carry Flag
         if (!dec) {
