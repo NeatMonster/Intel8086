@@ -874,6 +874,148 @@ public class Intel8086 {
             break;
 
         /*
+         * XLAT translate-table
+         *
+         * XLAT (translate) replaces a byte in the AL register with a byte from
+         * a 256-byte, user-coded translation table. Register BX is assumed to
+         * point to the beginning of the table. The byte in AL is used as an
+         * index into the table and is replaced by the byte at the offset in
+         * the table corresponding to AL's binary value. The first byte in the
+         * table has an offset of 0. For example, if AL contains 5H, and the
+         * sixth element of the translation table contains 33H, then AL will
+         * contain 33H following the instruction. XLAT is useful for
+         * translating characters from one code to another, the classic example
+         * being ASCII to EBCDIC or the reverse.
+         */
+        case 0xd7: // XLAT SOURCE-TABLE
+            al = getMem(os, (bh << 8 | bl) + al);
+            break;
+
+        /*
+         * Address Object Transfers
+         *
+         * The instructions manipulate the addresses of the variables rather
+         * than the contents or values of variables. They are most useful for
+         * list processing, based variables, and string operations.
+         */
+        /*
+         * LEA destination,source
+         *
+         * LEA (load effective address) transfers the offset of the source
+         * operand (rather than its value) to the destination operand. The
+         * source must be a memory operand, and the destination operand must be
+         * a 16-bit general register. LEA does not affect any flags. The XLAT
+         * and string instructions assume that certain registers point to
+         * operands; LEA can be used to load these register (e.g., loading BX
+         * with the address of the translate table used by the XLAT
+         * instruction).
+         */
+        case 0x8d: // LEA REG16,MEM16
+            decode();
+            src = getEA(mod, rm) - (os << 4);
+            setReg(w, reg, src);
+            break;
+
+        /*
+         * LDS destination,source
+         *
+         * LDS (load pointer using DS) transfers a 32-bit pointer variable from
+         * the source operand, which must be a memory operand, to the
+         * destination operand and register DS. The offset word of the pointer
+         * is transferred to the destination operand, which may be any 16-bit
+         * general register. The segment word of the pointer is transferred to
+         * register DS. Specifying SI as the destination operand is a
+         * convenient way to prepare to process a source string that is not in
+         * the current data segment (string instructions assume that the source
+         * string is located in the current data segment and that SI contains
+         * the offset of the string).
+         */
+        case 0xc5: // LDS REG16,MEM16
+            decode();
+            src = getEA(mod, rm);
+            setReg(w, reg, memory[src + 1] << 8 | memory[src]);
+            ds = memory[src + 3] << 8 | memory[src + 2];
+            break;
+
+        /*
+         * LES destination,source
+         *
+         * LES (load pointer using ES) transfers a 32-bit pointer variable from
+         * the source operand, which must be a memory operand, to the
+         * destination operand and register ES. The offset word of the pointer
+         * is transferred to the destination operand, which may be any 16-bit
+         * general register. The segment word of the pointer is transferred to
+         * register ES. Specifying DI as the destination operand is a
+         * convenient way to prepare to process a destination string that is
+         * not in the current extra segment. (The destination string must be
+         * located in the extra segment, and DI must contain the offset of the
+         * string).
+         */
+        case 0xc4: // LES REG16,MEM16
+            decode();
+            src = getEA(mod, rm);
+            setReg(w, reg, memory[src + 1] << 8 | memory[src]);
+            es = memory[src + 3] << 8 | memory[src + 2];
+            break;
+
+        /*
+         * Flag Transfers
+         */
+        /*
+         * LAHF
+         *
+         * LAHF (load register AH from flags) copies SF, ZF, AF, PF and CF into
+         * the bits 7, 6, 4, 2 and 0, respectively, of register AH. The content
+         * of bits 5, 3 and 1 is undefined; the flags themselves are not
+         * affected. LAHF is provided primarily for converting 8080/8085
+         * assembly language programs to run on an 8086.
+         */
+        case 0x9f: // LAHF
+            ah = flags & 0xff;
+            break;
+
+        /*
+         * SAHF
+         *
+         * SAHF (store register AH into flags) transfers bits 7, 6, 4, 2 and 0
+         * from register AH into SF, ZF, AF, PF and CF, respectively, replacing
+         * whatever values these flags previously had. OF, DF, IF and TF are
+         * not affected. This instruction is provided from 8080/8085
+         * compatibility.
+         */
+        case 0x9e: // SAHF
+            flags = flags & 0xff00 | ah;
+            break;
+
+        /*
+         * PUSHF
+         *
+         * PUSH decrements SP (the stack pointer) by two and then transfers all
+         * flags to the word at the top of stack pointed to by SP. The flags
+         * themselves are not affected.
+         */
+        case 0x9c: // PUSHF
+            push(flags);
+            break;
+
+        /*
+         * POPF
+         *
+         * POPF transfers specific bits from the word at the current top of
+         * stack (pointed to by register SP) into the 8086 flags, replacing
+         * whatever values the flags previously contained. SP is then
+         * incremented by two to point at the new top of stack. PUSHF and POPF
+         * allow a procedure to save and restore a calling program's flags.
+         * They also allow a program to change the setting of TF (there is no
+         * instruction for updating this flag directly). The change is
+         * accomplished by pushing the flags, altering bit 8 of the memory-
+         * image and then popping the flags.
+         */
+        case 0x9d: // POPF
+            flags = pop();
+            break;
+
+        /*
          * Arithmetic Instructions
          *
          * Arithmetic Data Formats
