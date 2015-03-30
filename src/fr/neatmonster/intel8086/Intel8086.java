@@ -71,6 +71,33 @@ public class Intel8086 {
     }
 
     /**
+     * Shifts left a value by a given number of positions, or right if that
+     * number is negative.
+     *
+     * @param x
+     *            the value
+     * @param n
+     *            the number of positions
+     * @return the new value
+     */
+    private static int shift(final int x, final int n) {
+        return n >= 0 ? x << n : x >>> -n;
+    }
+
+    /**
+     * Extends the sign of a value.
+     *
+     * @param w
+     *            word/byte operation
+     * @param x
+     *            the value
+     * @return the new value
+     */
+    private static int signext(final int w, final int x) {
+        return x << 32 - BITS[w] >> 32 - BITS[w];
+    }
+
+    /**
      * CF (carry flag)
      *
      * If an addition results in a carry out of the high-order bit of the
@@ -170,9 +197,9 @@ public class Intel8086 {
      */
     private static final int   OF     = 1 << 11;
 
-    /**
-     * Lookup table used for setting the parity table.
-     */
+    /** Lookup table used for clipping results. */
+    private static final int[] MASK   = new int[] { 0xff, 0xffff };
+    /** Lookup table used for setting the parity flag. */
     private static final int[] PARITY = {
         1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
         0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
@@ -191,6 +218,10 @@ public class Intel8086 {
         0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
         1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1
     };
+    /** Lookup table used for setting the sign and overflow flags. */
+    private static final int[] BITS   = new int[] { 8, 16 };
+    /** Lookup table used for setting the overflow flag. */
+    private static final int[] SIGN   = new int[] { 0x80, 0x8000 };
 
     /*
      * General Registers
@@ -562,6 +593,29 @@ public class Intel8086 {
     private int                rm;
 
     /**
+     * Performs addition with carry and sets flags accordingly.
+     *
+     * @param w
+     *            word/byte operation
+     * @param dst
+     *            the first operand
+     * @param src
+     *            the second operand
+     * @return the result
+     */
+    private int adc(final int w, final int dst, final int src) {
+        final int carry = (flags & CF) == CF ? 1 : 0;
+        final int res = dst + src + carry & MASK[w];
+
+        setFlag(CF, carry == 1 ? res <= dst : res < dst);
+        setFlag(AF, ((res ^ dst ^ src) & AF) > 0);
+        setFlag(OF, (shift((dst ^ src ^ -1) & (dst ^ res), 12 - BITS[w]) & OF) > 0);
+        setFlags(w, res);
+
+        return res;
+    }
+
+    /**
      * Performs addition and sets flags accordingly.
      *
      * @param w
@@ -570,66 +624,18 @@ public class Intel8086 {
      *            the first operand
      * @param src
      *            the second operand
-     * @param inc
-     *            should not set carry?
      * @return the result
      */
-    private int add(final int w, final int dst, final int src, final boolean inc) {
-        int res = dst + src;
+    private int add(final int w, final int dst, final int src) {
+        final int res = dst + src & MASK[w];
 
-        // Carry Flag
-        if (!inc) {
-            if (w == 0b0 && res > 0xff)
-                flags |= CF;
-            else if (w == 0b1 && res > 0xffff)
-                flags |= CF;
-            else
-                flags &= ~CF;
-        }
-
-        // Adjust Flag
-        if (((res ^ dst ^ src) & 0b10) == 0x10)
-            flags |= AF;
-        else
-            flags &= ~AF;
-
-        // Overflow Flag
-        if (w == 0b0 && ((res ^ dst) & (res ^ src) & 0x80) == 0x80)
-            flags |= OF;
-        if (w == 0b1 && ((res ^ dst) & (res ^ src) & 0x8000) == 0x8000)
-            flags |= OF;
-        else
-            flags &= ~OF;
-
-        setFlags(w, res &= w == 0b0 ? 0xff : 0xffff);
+        setFlag(CF, res < dst);
+        setFlag(AF, ((res ^ dst ^ src) & AF) > 0);
+        setFlag(OF, (shift((dst ^ src ^ -1) & (dst ^ res), 12 - BITS[w]) & OF) > 0);
+        setFlags(w, res);
 
         return res;
     }
-
-   /**
-    * Performs logical AND and sets flags accordingly.
-    *
-    * @param w
-    *            word/byte operation
-    * @param dst
-    *            the first operand
-    * @param src
-    *            the second operand
-    * @return the result
-    */
-   private int and(final int w, final int dst, final int src) {
-       final int res = dst & src & (w == 0b0 ? 0xff : 0xffff);
-
-       // Carry Flag
-       flags &= ~CF;
-
-       // Overflow Flag
-       flags &= ~OF;
-
-       setFlags(w, res);
-
-       return res;
-   }
 
     /**
      * Executes one cycle: fetch and execute.
@@ -731,7 +737,7 @@ public class Intel8086 {
         case 0xbd: // MOV BP,IMMED16
         case 0xbe: // MOV SI,IMMED16
         case 0xbf: // MOV DI,IMMED16
-            w = queue[0] >> 3 & 0b1;
+            w = queue[0] >>> 3 & 0b1;
             reg = queue[0] & 0b111;
             src = getMem(ip++);
             if (w == 0b1)
@@ -1110,7 +1116,7 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            res = add(w, dst, src, false);
+            res = add(w, dst, src);
             setRM(w, mod, rm, res);
             break;
         case 0x02: // ADD REG8,REG8/MEM8
@@ -1118,7 +1124,7 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            res = add(w, dst, src, false);
+            res = add(w, dst, src);
             setReg(w, reg, res);
             break;
 
@@ -1129,7 +1135,7 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            res = add(w, dst, src, false);
+            res = add(w, dst, src);
             setReg(w, 0b000, res);
             break;
 
@@ -1149,9 +1155,7 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            if ((flags & CF) == CF)
-                ++dst;
-            res = add(w, dst, src, false);
+            res = adc(w, dst, src);
             setRM(w, mod, rm, res);
             break;
         case 0x12: // ADC REG8,REG8/MEM8
@@ -1159,9 +1163,7 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            if ((flags & CF) == CF)
-                ++dst;
-            res = add(w, dst, src, false);
+            res = adc(w, dst, src);
             setReg(w, reg, res);
             break;
 
@@ -1172,9 +1174,7 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            if ((flags & CF) == CF)
-                ++dst;
-            res = add(w, dst, src, false);
+            res = adc(w, dst, src);
             setReg(w, 0b000, res);
             break;
 
@@ -1196,7 +1196,7 @@ public class Intel8086 {
         case 0x47: // INC DI
             reg = queue[0] & 0b111;
             src = getReg(0b1, reg);
-            res = add(0b1, src, 1, true);
+            res = inc(0b1, src);
             setReg(0b1, reg, res);
             break;
 
@@ -1209,14 +1209,14 @@ public class Intel8086 {
          * undefined following execution of AAA.
          */
         case 0x37: // AAA
-            if ((al & 0xf) > 9 || (flags & AF) == AF) {
+            if ((al & 0xf) > 9 || getFlag(AF)) {
                 al += 6;
                 ah = ah + 1 & 0xff;
-                flags |= CF;
-                flags |= AF;
+                setFlag(CF, true);
+                setFlag(AF, true);
             } else {
-                flags &= ~CF;
-                flags &= ~AF;
+                setFlag(CF, false);
+                setFlag(AF, false);
             }
             al &= 0xf;
             break;
@@ -1232,23 +1232,20 @@ public class Intel8086 {
          */
         case 0x27: { // DAA
             final int oldAL = al;
-            final int oldCF = flags & CF;
-            flags &= ~CF;
-            if ((al & 0xf) > 9 || (flags & AF) == AF) {
+            final boolean oldCF = getFlag(CF);
+            setFlag(CF, false);
+            if ((al & 0xf) > 9 || getFlag(AF)) {
                 al += 6;
-                if (oldCF == CF || al < 0)
-                    flags |= CF;
-                else
-                    flags &= ~CF;
+                setFlag(CF, oldCF || al < 0);
                 al &= 0xff;
-                flags |= AF;
+                setFlag(AF, true);
             } else
-                flags &= ~AF;
-            if (oldAL > 0x99 || oldCF == CF) {
+                setFlag(AF, false);
+            if (oldAL > 0x99 || oldCF) {
                 al = al + 0x60 & 0xff;
-                flags |= CF;
+                setFlag(CF, true);
             } else
-                flags &= ~CF;
+                setFlag(CF, false);
             setFlags(0b0, al);
             break;
         }
@@ -1270,7 +1267,7 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            res = sub(w, dst, src, false);
+            res = sub(w, dst, src);
             setRM(w, mod, rm, res);
             break;
         case 0x2a: // SUB REG8,REG8/MEM8
@@ -1278,7 +1275,7 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            res = sub(w, dst, src, false);
+            res = sub(w, dst, src);
             setReg(w, reg, res);
             break;
 
@@ -1289,7 +1286,7 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            res = sub(w, dst, src, false);
+            res = sub(w, dst, src);
             setReg(w, 0b000, res);
             break;
 
@@ -1310,9 +1307,7 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            if ((flags & CF) == CF)
-                --dst;
-            res = sub(w, dst, src, false);
+            res = sbb(w, dst, src);
             setRM(w, mod, rm, res);
             break;
         case 0x1a: // SBB REG8,REG8/MEM8
@@ -1320,9 +1315,7 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            if ((flags & CF) == CF)
-                --dst;
-            res = sub(w, dst, src, false);
+            res = sbb(w, dst, src);
             setReg(w, reg, res);
             break;
 
@@ -1333,9 +1326,7 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            if ((flags & CF) == CF)
-                --dst;
-            res = sub(w, dst, src, false);
+            res = sbb(w, dst, src);
             setReg(w, 0b000, res);
             break;
 
@@ -1357,7 +1348,7 @@ public class Intel8086 {
         case 0x4f: // DEC DI
             reg = queue[0] & 0b111;
             dst = getReg(0b1, reg);
-            res = sub(0b1, dst, 1, true);
+            res = dec(0b1, dst);
             setReg(0b1, reg, res);
             break;
 
@@ -1392,14 +1383,14 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            sub(w, dst, src, false);
+            sub(w, dst, src);
             break;
         case 0x3a: // CMP REG8,REG8/MEM8
         case 0x3b: // CMP REG16,REG16/MEM16
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            sub(w, dst, src, false);
+            sub(w, dst, src);
             break;
 
         // Immediate with Accumulator
@@ -1409,7 +1400,7 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            sub(w, dst, src, false);
+            sub(w, dst, src);
             break;
 
         /*
@@ -1423,14 +1414,14 @@ public class Intel8086 {
          * SF and ZF is undefined following execution of AAS.
          */
         case 0x3f: // AAS
-            if ((al & 0xf) > 9 || (flags & AF) == AF) {
+            if ((al & 0xf) > 9 || getFlag(AF)) {
                 al -= 6;
                 ah = ah - 1 & 0xff;
-                flags |= CF;
-                flags |= AF;
+                setFlag(CF, true);
+                setFlag(CF, true);
             } else {
-                flags &= ~CF;
-                flags &= ~AF;
+                setFlag(CF, false);
+                setFlag(CF, false);
             }
             al &= 0xf;
             break;
@@ -1445,28 +1436,177 @@ public class Intel8086 {
          * DAS updates AF, CF, PF, SF and ZF; the content of OF is undefined
          * following the execution of DAS.
          */
-        case 0x2f: { // DAS
+        case 0x2f: // DAS
+        {
             final int oldAL = al;
-            final int oldCF = flags & CF;
-            flags &= ~CF;
-            if ((al & 0xf) > 9 || (flags & AF) == AF) {
+            final boolean oldCF = getFlag(CF);
+            setFlag(CF, false);
+            if ((al & 0xf) > 9 || getFlag(AF)) {
                 al -= 6;
-                if (oldCF == CF || (al & 0xff) > 0)
-                    flags |= CF;
-                else
-                    flags &= ~CF;
+                setFlag(CF, oldCF || (al & 0xff) > 0);
                 al &= 0xff;
-                flags |= AF;
+                setFlag(AF, true);
             } else
-                flags &= ~AF;
-            if (oldAL > 0x99 || oldCF == CF) {
+                setFlag(AF, false);
+            if (oldAL > 0x99 || oldCF) {
                 al = al - 0x60 & 0xff;
-                flags |= CF;
+                setFlag(CF, true);
             } else
-                flags &= ~CF;
+                setFlag(CF, false);
             setFlags(0b0, al);
             break;
         }
+
+        /*
+         * Multiplication
+         */
+        /*
+         * MUL source
+         *
+         * MUL (Multiply) performs an unsigned multiplication of the source
+         * operand and the accumulator. If the source is a byte, then it is
+         * multiplied by register AL, and the double-length result is returned
+         * in AH and AL. If the source operand is a word, then it is multiplied
+         * by register AX, and the double-length result is returned in
+         * registers DX and AX. The operands are treated as unsigned binary
+         * numbers. If the upper half of the result (AH for byte source, DX for
+         * word source) is nonzero, CF and OF are set; otherwise they are
+         * cleared. When CF and OF are set, they indicate that AH or DX
+         * contains significant digits of the result. The content of AF, PF, SF
+         * and ZF is undefined following execution of MUL.
+         */
+
+        /*
+         * IMUL source
+         *
+         * IMUL (Integer Multiply) performs a signed multiplication of the
+         * source operand and the accumulator. If the source is a byte, then it
+         * is multiplied by register AL, and the double-length result is
+         * returned in AH and AL. If the source is a word, then it is
+         * multiplied by register AX, and the double-length result is returned
+         * in registers DX and AX. If the upper half of the result (AH for byte
+         * source, DX for word source) is not the sign extension of the lower
+         * half of the result, CF and OF are set, they indicate that AH of DX
+         * contains significant digits of the result. The content of AF, PF, SF
+         * and ZF is undefined following execution of IMUL.
+         */
+
+        /*
+         * AAM
+         *
+         * AAM (ASCII Adjust for Multiply) corrects the result of a previous
+         * multiplication of two valid unpacked decimal operands. A valid 2-
+         * digit unpacked decimal number is derived from the content of AH and
+         * AL and is returned to AH and AL. The high-order half-bytes of the
+         * multiplied operands must have been 0H for AAM to produce a correct
+         * result. AAM updates PF, SF and ZF; the content of AF, CF and OF is
+         * undefined following execution of AAM.
+         */
+        case 0xd4: // AAM
+            src = getMem(ip++);
+            if (src == 0)
+                break; //TODO Generate a type 0 interrupt.
+            ah = (al / src) & 0xff;
+            al = (al % src) & 0xff;
+            setFlags(0b0, al);
+            break;
+
+        /*
+         * Division
+         */
+        /*
+         * DIV source
+         *
+         * DIV (divide) performs an unsigned division of the accumulator (and
+         * its extension) by the source operand. If the source operand is a
+         * byte, it is divided into the double-length dividend assumed to be in
+         * register AL and AH. The single-length quotient is returned in AL,
+         * and the single-length remainder is returned in AH. If the source
+         * operand is a word, it is divided into the double-length dividend in
+         * register AX and DX. The single-length quotient is returned in AX,
+         * and the single-length remainder is returned in DX. If the quotient
+         * exceeds the capacity of its destination register (FFH for byte
+         * source, FFFFH for word source), as when division by zero is
+         * attempted, a type 0 interrupt is generated, and the quotient and
+         * remainder are undefined. Nonintegral quotients are truncated to
+         * integers. The content of AF, CF, OF, PF, SF and ZF is undefined
+         * following execution of DIV.
+         */
+
+        /*
+         * IDIV source
+         *
+         * IDIV (Integer Divide) performs a signed division of the accumulator
+         * (and its extension) by the source operand. If the source operand is
+         * a byte, it is divided into the double-length dividend assumed to be
+         * in register AL and AH; the single-length quotient is returned in AL,
+         * and the single-length remainder is returned in AH. For byte integer
+         * division, the maximum position quotient is +127 (7FH) and the
+         * minimum negative quotient is -127 (81H). If the source operand is a
+         * word, it is divided into the double-length dividend in register AX
+         * and DX; the single-length quotient is returned in AX, and the
+         * single-length remainder is returned in DX. For word integer
+         * division, the maximum positive quotient is +32,767 (7FFFH) and the
+         * minimum negative quotient is -32,767 (8001H). If the quotient is
+         * positive and exceeds the maximum, or is negative and is less than
+         * the minimum, the quotient and remainder are undefined, and a type 0
+         * interrupt is generated. In particular, this occurs if division by 0
+         * is attempted. Nonintegral quotients are truncated (toward 0) to
+         * integers, and the remainder has the same sign as the dividend. The
+         * content of AF, CF, OF, PF, SF and ZF is undefined following IDIV.
+         */
+
+        /*
+         * AAD
+         *
+         * AAD (ASCII Adjust for Division) modifies the numerator in AL before
+         * dividing two valid unpacked decimal operands so that the quotient
+         * produced by the division will be a valid unpacked decimal number. AH
+         * must be zero for the subsequent DIV to produce the correct result.
+         * The quotient is returned in AL, and the remainder is returned in AH;
+         * both high-order half-bytes are zeroed. AAD updates PF, SF and ZF;
+         * the content of AF, CF and OF is undefined following execution of
+         * AAD.
+         */
+        case 0xd5: // AAD
+            src = getMem(ip++);
+            al = ah * src + al & 0xff;
+            ah = 0; 
+            setFlags(0b0, al);
+            break;
+
+        /*
+         * CBW
+         *
+         * CBW (Convert Byte to Word) extends the sign of the byte in register
+         * AL throughout register AH. CBW does not affect any flags. CBW can be
+         * used to produce a double-length (word) dividend from a byte prior to
+         * performing byte division.
+         */
+        case 0x98: // CBW
+            if ((al & 0x80) == 0x80)
+                ah = 0xff;
+            else
+                ah = 0x00;
+            break;
+
+        /*
+         * CWD
+         *
+         * CWD (Convert Word to Doubleword) extends the sign of the word in
+         * register AX throughout register DX. CWD does not affect any flags.
+         * CWD can be used to produce a double-length (doubleword) dividend
+         * from a word prior to performing word division.
+         */
+        case 0x99: // CWD
+            if ((ah & 0x80) == 0x80) {
+                dl = 0xff;
+                dh = 0xff;
+            } else {
+                dl = 0x00;
+                dh = 0x00;
+            }
+            break;
 
         /*
          * Bit Manipulation Instructions
@@ -1509,7 +1649,8 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            res = and(w, dst, src);
+            res = dst & src;
+            logic(w, res);
             setRM(w, mod, rm, res);
             break;
         case 0x22: // AND REG8,REG8/MEM8
@@ -1517,7 +1658,8 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            res = and(w, dst, src);
+            res = dst & src;
+            logic(w, res);
             setReg(w, reg, res);
             break;
 
@@ -1528,7 +1670,8 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            res = and(w, dst, src);
+            res = dst & src;
+            logic(w, res);
             setReg(w, 0b000, res);
             break;
 
@@ -1546,7 +1689,8 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            res = or(w, dst, src);
+            res = dst | src;
+            logic(w, res);
             setRM(w, mod, rm, res);
             break;
         case 0x0a: // OR REG8,REG8/MEM8
@@ -1554,7 +1698,8 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            res = or(w, dst, src);
+            res = dst | src;
+            logic(w, res);
             setReg(w, reg, res);
             break;
 
@@ -1565,7 +1710,8 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            res = or(w, dst, src);
+            res = dst | src;
+            logic(w, res);
             setReg(w, 0b000, res);
             break;
 
@@ -1584,7 +1730,8 @@ public class Intel8086 {
             decode();
             dst = getRM(w, mod, rm);
             src = getReg(w, reg);
-            res = xor(w, dst, src);
+            res = dst ^ src;
+            logic(w, res);
             setRM(w, mod, rm, res);
             break;
         case 0x32: // XOR REG8,REG8/MEM8
@@ -1592,7 +1739,8 @@ public class Intel8086 {
             decode();
             dst = getReg(w, reg);
             src = getRM(w, mod, rm);
-            res = xor(w, dst, src);
+            res = dst ^ src;
+            logic(w, res);
             setReg(w, reg, res);
             break;
 
@@ -1603,7 +1751,8 @@ public class Intel8086 {
             src = getMem(ip++);
             if (w == 0b1)
                 src |= getMem(ip++) << 8;
-            res = xor(w, dst, src);
+            res = dst ^ src;
+            logic(w, res);
             setReg(w, 0b000, res);
             break;
 
@@ -1696,8 +1845,7 @@ public class Intel8086 {
         case 0xe8: // CALL NEAR-PROC
             dst = getMem(ip++);
             dst |= getMem(ip++) << 8;
-            // Unsigned to signed.
-            dst = dst << 16 >> 16;
+            dst = signext(0b1, dst);
             push(ip);
             ip += dst;
             break;
@@ -1795,16 +1943,14 @@ public class Intel8086 {
         case 0xe9: // JMP NEAR-LABEL
             dst = getMem(ip++);
             dst |= getMem(ip++) << 8;
-            // Unsigned to signed.
-            dst = dst << 16 >> 16;
+            dst = signext(0b1, dst);
             ip += dst;
             break;
 
         // Direct within Segment-Short
         case 0xeb: // JMP SHORT-LABEL
             dst = getMem(ip++);
-            // Unsigned to signed.
-            dst = dst << 24 >> 24;
+            dst = signext(0b0, dst);
             ip += dst;
             break;
 
@@ -1843,9 +1989,8 @@ public class Intel8086 {
          */
         case 0x74: // JE/JZ SHORT-LABEL
             dst = getMem(ip++);
-            // Unsigned to signed.
-            dst = dst << 24 >> 24;
-            if ((flags & ZF) > 0)
+            dst = signext(0b0, dst);
+            if (getFlag(ZF))
                 ip += dst;
             break;
 
@@ -1856,9 +2001,8 @@ public class Intel8086 {
          */
         case 0x72: // JB/JNAE/JC SHORT-LABEL
             dst = getMem(ip++);
-            // Unsigned to signed.
-            dst = dst << 24 >> 24;
-            if ((flags & CF) > 0)
+            dst = signext(0b0, dst);
+            if (getFlag(CF))
                 ip += dst;
             break;
 
@@ -1869,9 +2013,8 @@ public class Intel8086 {
          */
         case 0x76: // JBE/JNA SHORT-LABEL
             dst = getMem(ip++);
-            // Unsigned to signed.
-            dst = dst << 24 >> 24;
-            if ((flags & CF | flags & ZF) > 0)
+            dst = signext(0b0, dst);
+            if (getFlag(CF) || getFlag(ZF))
                 ip += dst;
             break;
 
@@ -1882,9 +2025,8 @@ public class Intel8086 {
          */
         case 0x78: // JS SHORT-LABEL
             dst = getMem(ip++);
-            // Unsigned to signed.
-            dst = dst << 24 >> 24;
-            if ((flags & SF) > 0)
+            dst = signext(0b0, dst);
+            if (getFlag(SF))
                 ip += dst;
             break;
 
@@ -1895,9 +2037,8 @@ public class Intel8086 {
          */
         case 0x75: // JNE/JNZ SHORT-LABEL
             dst = getMem(ip++);
-            // Unsigned to signed.
-            dst = dst << 24 >> 24;
-            if ((flags & ZF) == 0)
+            dst = signext(0b0, dst);
+            if (!getFlag(ZF))
                 ip += dst;
             break;
 
@@ -1908,9 +2049,8 @@ public class Intel8086 {
          */
         case 0x73: // JNE/JNZ SHORT-LABEL
             dst = getMem(ip++);
-            // Unsigned to signed.
-            dst = dst << 24 >> 24;
-            if ((flags & CF) == 0)
+            dst = signext(0b0, dst);
+            if (!getFlag(CF))
                 ip += dst;
             break;
 
@@ -1921,9 +2061,8 @@ public class Intel8086 {
          */
         case 0x77: // JNBE/JA SHORT-LABEL
             dst = getMem(ip++);
-            // Unsigned to signed.
-            dst = dst << 24 >> 24;
-            if ((flags & CF | flags & ZF) == 0)
+            dst = signext(0b0, dst);
+            if (!getFlag(CF) && !getFlag(ZF))
                 ip += dst;
             break;
 
@@ -1934,9 +2073,8 @@ public class Intel8086 {
          */
         case 0x79: // JNS SHORT-LABEL
             dst = getMem(ip++);
-            // Unsigned to signed.
-            dst = dst << 24 >> 24;
-            if ((flags & SF) == 0)
+            dst = signext(0b0, dst);
+            if (!getFlag(SF))
                 ip += dst;
             break;
 
@@ -1961,7 +2099,7 @@ public class Intel8086 {
          * RCL and RCR instructions.
          */
         case 0xf8:
-            flags &= ~CF;
+            setFlag(CF, false);
             break;
 
         /*
@@ -1970,7 +2108,7 @@ public class Intel8086 {
          * STC (Set Carry flag) sets CF to 1 and affects no other flags.
          */
         case 0xf9:
-            flags |= CF;
+            setFlag(CF, true);
             break;
 
         /*
@@ -2046,46 +2184,45 @@ public class Intel8086 {
                 src |= 0xff00;
             switch (reg) {
             case 0b000: // ADD
-                res = add(w, dst, src, false);
+                res = add(w, dst, src);
                 setRM(w, mod, rm, res);
                 break;
             case 0b001: // OR
                 if (queue[0] == 0x80 || queue[0] == 0x81) {
-                    res = or(w, dst, src);
+                    res = dst | src;
+                    logic(w, res);
                     setRM(w, mod, rm, res);
                     break;
                 }
                 break;
             case 0b010: // ADC
-                if ((flags & CF) == CF)
-                    ++dst;
-                res = add(w, dst, src, false);
+                res = adc(w, dst, src);
                 setRM(w, mod, rm, res);
                 break;
             case 0b011: // SBB
-                if ((flags & CF) == CF)
-                    --dst;
-                res = sub(w, dst, src, false);
+                res = sbb(w, dst, src);
                 setRM(w, mod, rm, res);
                 break;
             case 0b100: // AND
                 if (queue[0] == 0x80 || queue[0] == 0x81) {
-                    res = and(w, dst, src);
+                    res = dst & src;
+                    logic(w, res);
                     setRM(w, mod, rm, res);
                 }
                 break;
             case 0b101: // SUB
-                res = sub(w, dst, src, false);
+                res = sub(w, dst, src);
                 setRM(w, mod, rm, res);
                 break;
             case 0b110: // XOR
                 if (queue[0] == 0x80 || queue[0] == 0x81) {
-                    res = xor(w, dst, src);
+                    res = dst ^ src;
+                    logic(w, res);
                     setRM(w, mod, rm, res);
                 }
                 break;
             case 0b111: // CMP
-                sub(w, dst, src, false);
+                sub(w, dst, src);
                 break;
             }
             break;
@@ -2105,18 +2242,142 @@ public class Intel8086 {
         // GROUP 3
         case 0xf6:
             // NEG REG8/MEM8
+            // MUL REG8/MEM8
+            // IMUL REG8/MEM8
+            // DIV REG8/MEM8
+            // IDIV REG8/MEM8
         case 0xf7:
             // NEG REG16/MEM16
+            // MUL REG16/MEM16
+            // IMUL REG16/MEM16
+            // DIV REG16/MEM16
+            // IDIV REG16/MEM16
             decode();
             src = getRM(w, mod, rm);
             switch (reg) {
             case 0b011: // NEG
-                dst = sub(w, 0, src, false);
-                if (dst != 0)
-                    flags |= CF;
-                else
-                    flags &= ~CF;
+                dst = sub(w, 0, src);
+                setFlag(CF, dst > 0);
                 setRM(w, mod, rm, dst);
+                break;
+            case 0b100: // MUL
+                if (w == 0b0) {
+                    dst = al;
+                    res = dst * src & 0xffff;
+                    al = res & 0xff;
+                    ah = res >>> 8 & 0xff;
+                    if (ah > 0) {
+                        setFlag(CF, true);
+                        setFlag(OF, true);
+                    } else {
+                        setFlag(CF, false);
+                        setFlag(OF, false);
+                    }
+                } else {
+                    dst = ah << 8 | al;
+                    final long lres = (long) dst * (long) src & 0xffffffff;
+                    al = (int) (lres & 0xff);
+                    ah = (int) (lres >>> 8 & 0xff);
+                    dl = (int) (lres >>> 16 & 0xff);
+                    dh = (int) (lres >>> 24 & 0xff);
+                    if ((dh << 8 | dl) > 0) {
+                        setFlag(CF, true);
+                        setFlag(OF, true);
+                    } else {
+                        setFlag(CF, false);
+                        setFlag(OF, false);
+                    }
+                }
+                break;
+            case 0b101: // IMUL
+                if (w == 0b0) {
+                    src = signext(0b0, src);
+                    dst = al;
+                    dst = signext(0b0, dst);
+                    res = dst * src & 0xffff;
+                    al = res & 0xff;
+                    ah = res >>> 8 & 0xff;
+                    if (ah > 0x00 && ah < 0xff) {
+                        setFlag(CF, true);
+                        setFlag(OF, true);
+                    } else {
+                        setFlag(CF, false);
+                        setFlag(OF, false);
+                    }
+                } else {
+                    src = signext(0b1, src);
+                    dst = ah << 8 | al;
+                    dst = signext(0b1, dst);
+                    final long lres = (long) dst * (long) src & 0xffffffff;
+                    al = (int) (lres & 0xff);
+                    ah = (int) (lres >>> 8 & 0xff);
+                    dl = (int) (lres >>> 16 & 0xff);
+                    dh = (int) (lres >>> 24 & 0xff);
+                    if ((dh << 8 | dl) > 0x0000 && (dh << 8 | dl) < 0xffff) {
+                        setFlag(CF, true);
+                        setFlag(OF, true);
+                    } else {
+                        setFlag(CF, false);
+                        setFlag(OF, false);
+                    }
+                }
+                break;
+            case 0b110: // DIV
+                if (src == 0)
+                    break; //TODO Generate a type 0 interrupt.
+                if (w == 0b0) {
+                    dst = ah << 8 | al;
+                    res = dst / src & 0xffff;
+                    if (res > 0xff)
+                        break; //TODO Generate a type 0 interrupt.
+                    else {
+                        al = res & 0xff;
+                        ah = dst % src & 0xff;
+                    }
+                } else {
+                    final long ldst = (long) (dh << 8 | dl) << 16 | ah << 8 | al;
+                    long lres = ldst / src & 0xffffffff;
+                    if (lres > 0xffff)
+                        break; //TODO Generate a type 0 interrupt.
+                    else {
+                        al = (int) (lres & 0xff);
+                        ah = (int) (lres >>> 8 & 0xff);
+                        lres = ldst % src & 0xffff;
+                        dl = (int) (lres & 0xff);
+                        dh = (int) (lres >>> 8 & 0xff);
+                    }
+                }
+                break;
+            case 0b111: // IDIV
+                if (src == 0)
+                    break; //TODO Generate a type 0 interrupt.
+                if (w == 0b0) {
+                    src = signext(0b0, src);
+                    dst = ah << 8 | al;
+                    dst = signext(0b1, dst);
+                    res = dst / src & 0xffff;
+                    if (res > 0x007f && res < 0xff81)
+                        break; //TODO Generate a type 0 interrupt.
+                    else {
+                        al = res & 0xff;
+                        ah = dst % src & 0xff;
+                    }
+                } else {
+                    src = signext(0b1, src);
+                    long ldst = (long) (dh << 8 | dl) << 16 | ah << 8 | al;
+                    // Do sign extension manually.
+                    ldst = ldst << 32 >> 32;
+                    long lres = ldst / src & 0xffffffff;
+                    if (lres > 0x00007fff | lres < 0xffff8000)
+                        break; //TODO Generate a type 0 interrupt.
+                    else {
+                        al = (int) (lres & 0xff);
+                        ah = (int) (lres >>> 8 & 0xff);
+                        lres = ldst % src & 0xffff;
+                        dl = (int) (lres & 0xff);
+                        dh = (int) (lres >>> 8 & 0xff);
+                    }
+                }
                 break;
             }
             break;
@@ -2129,11 +2390,11 @@ public class Intel8086 {
             src = getRM(w, mod, rm);
             switch (reg) {
             case 0b000: // INC
-                res = add(w, src, 1, true);
+                res = inc(w, src);
                 setRM(w, mod, rm, res);
                 break;
             case 0b001: // DEC
-                res = sub(w, src, 1, true);
+                res = dec(w, src);
                 setRM(w, mod, rm, res);
                 break;
             }
@@ -2152,11 +2413,11 @@ public class Intel8086 {
             src = getRM(w, mod, rm);
             switch (reg) {
             case 0b000: // INC
-                res = add(w, src, 1, true);
+                res = inc(w, src);
                 setRM(w, mod, rm, res);
                 break;
             case 0b001: // DEC
-                res = sub(w, src, 1, true);
+                res = dec(w, src);
                 setRM(w, mod, rm, res);
                 break;
             case 0b010: // CALL
@@ -2188,6 +2449,25 @@ public class Intel8086 {
     }
 
     /**
+     * Decrements an operand and sets flags accordingly.
+     *
+     * @param w
+     *            word/byte operation
+     * @param dst
+     *            the operand
+     * @return the result
+     */ 
+    private int dec(final int w, final int dst) {
+        final int res = (dst - 1) & MASK[w];
+
+        setFlag(AF, ((res ^ dst ^ 1) & AF) > 0);
+        setFlag(OF, res == SIGN[w] - 1);
+        setFlags(w, res);
+
+        return res;
+    }
+
+    /**
      * Decodes the second byte of the instruction and increments IP accordingly.
      */
     private void decode() {
@@ -2213,8 +2493,8 @@ public class Intel8086 {
         while (cycle()) {
             for (int y = 0; y < 25; y++)
                 for (int x = 0; x < 80; x++) {
-                    final char ch = (char) memory[0x8000 + y * 80 + x];
-                    System.out.print(ch == 0 ? " " : ch);
+                    final char c = (char) memory[0x8000 + y * 80 + x];
+                    System.out.print(c == 0 ? " " : c);
                     if (x == 79)
                         System.out.println("");
                 }
@@ -2401,6 +2681,17 @@ public class Intel8086 {
     }
 
     /**
+     * Gets the state of a flag.
+     *
+     * @param flag
+     *            the flag to check
+     * @return true if set, false if cleared
+     */
+    private boolean getFlag(final int flag) {
+        return (flags & flag) > 0;
+    }
+
+    /**
      * Gets the value at the specified memory address.
      *
      * @param ip
@@ -2541,6 +2832,25 @@ public class Intel8086 {
     }
 
     /**
+     * Increments an operand and sets flags accordingly.
+     *
+     * @param w
+     *            word/byte operation
+     * @param dst
+     *            the operand
+     * @return the result
+     */
+    private int inc(final int w, final int dst) {
+        final int res = dst + 1 & MASK[w];
+
+        setFlag(AF, ((res ^ dst ^ 1) & AF) > 0);
+        setFlag(OF, res == SIGN[w]);
+        setFlags(w, res);
+
+        return res;
+    }
+
+    /**
      * Loads a binary file into memory at the specified address.
      *
      * @param bin
@@ -2552,28 +2862,17 @@ public class Intel8086 {
     }
 
     /**
-     * Performs logical OR and sets flags accordingly.
+     * Sets flags according to the result of a logical operation.
      *
      * @param w
      *            word/byte operation
-     * @param dst
-     *            the first operand
-     * @param src
-     *            the second operand
-     * @return the result
+     * @param res
+     *            the result
      */
-    private int or(final int w, final int dst, final int src) {
-        final int res = (dst | src) & (w == 0b0 ? 0xff : 0xffff);
-
-        // Carry Flag
-        flags &= ~CF;
-
-        // Overflow Flag
-        flags &= ~OF;
-
+    private void logic(final int w, final int res) {
+        setFlag(CF, false);
+        setFlag(OF, false);
         setFlags(w, res);
-
-        return res;
     }
 
     /**
@@ -2615,6 +2914,44 @@ public class Intel8086 {
     }
 
     /**
+     * Performs subtraction with borrow and sets flags accordingly.
+     *
+     * @param w
+     *            word/byte operation
+     * @param dst
+     *            the first operand
+     * @param src
+     *            the second operand
+     * @return the result
+     */
+    private int sbb(final int w, final int dst, final int src) {
+        final int carry = (flags & CF) == CF ? 1 : 0;
+        final int res = dst - src - carry & MASK[w];
+
+        setFlag(CF, carry > 0 ? dst <= src : dst < src);
+        setFlag(AF, ((res ^ dst ^ src) & AF) > 0);
+        setFlag(OF, (shift((dst ^ src) & (dst ^ res), 12 - BITS[w]) & OF) > 0);
+        setFlags(w, res);
+
+        return res;
+    }
+
+    /**
+     * Sets or clears a flag.
+     *
+     * @param flag
+     *            the flag to affect
+     * @param set
+     *            true to set, false to clear
+     */
+    private void setFlag(final int flag, final boolean set) {
+        if (set)
+            flags |= flag;
+        else
+            flags &= ~flag;
+    }
+
+    /**
      * Sets the parity, zero and sign flags.
      *
      * @param w
@@ -2623,25 +2960,9 @@ public class Intel8086 {
      *            the result
      */
     private void setFlags(final int w, final int res) {
-        // Parity Flag
-        if (PARITY[res & 0xff] > 0)
-            flags |= PF;
-        else
-            flags &= ~PF;
-
-        // Zero Flag
-        if (res == 0)
-            flags |= ZF;
-        else
-            flags &= ~ZF;
-
-        // Sign Flag
-        if (w == 0b0 && (res & 0x80) > 0)
-            flags |= SF;
-        else if (w == 0b1 && (res & 0x8000) > 0)
-            flags |= SF;
-        else
-            flags &= ~SF;
+        setFlag(PF, PARITY[res & 0xff] > 0);
+        setFlag(ZF, res == 0);
+        setFlag(SF, (shift(res, 8 - BITS[w]) & SF) > 0);
     }
 
     /**
@@ -2810,66 +3131,14 @@ public class Intel8086 {
      *            the first operand
      * @param src
      *            the second operand
-     * @param dec
-     *            should not set carry?
      * @return the result
      */
-    private int sub(final int w, final int dst, final int src, final boolean dec) {
-        int res = dst - src;
+    private int sub(final int w, final int dst, final int src) {
+        final int res = dst - src & MASK[w];
 
-        // Handle overflow.
-        if (w == 0b0 && res < 0)
-            res &= 0xff;
-        else if (w == 0b1 && res < 0)
-            res &= 0xffff;
-
-        // Carry Flag
-        if (!dec) {
-            if (dst < src)
-                flags |= CF;
-            else
-                flags &= ~CF;
-        }
-
-        // Adjust Flag
-        if (((res ^ dst ^ src) & 0b10) > 0)
-            flags |= AF;
-        else
-            flags &= ~AF;
-
-        // Overflow Flag
-        if (w == 0b0 && ((res ^ dst) & (dst ^ src) & 0x80) > 0)
-            flags |= OF;
-        if (w == 0b1 && ((res ^ dst) & (dst ^ src) & 0x8000) > 0)
-            flags |= OF;
-        else
-            flags &= ~OF;
-
-        setFlags(w, res &= w == 0b0 ? 0xff : 0xffff);
-
-        return res;
-    }
-
-    /**
-     * Performs logical XOR and sets flags accordingly.
-     *
-     * @param w
-     *            word/byte operation
-     * @param dst
-     *            the first operand
-     * @param src
-     *            the second operand
-     * @return the result
-     */
-    private int xor(final int w, final int dst, final int src) {
-        final int res = (dst ^ src) & (w == 0b0 ? 0xff : 0xffff);
-
-        // Carry Flag
-        flags &= ~CF;
-
-        // Overflow Flag
-        flags &= ~OF;
-
+        setFlag(CF, dst < src);
+        setFlag(AF, ((res ^ dst ^ src) & AF) > 0);
+        setFlag(OF, (shift((dst ^ src) & (dst ^ res), 12 - BITS[w]) & OF) > 0);
         setFlags(w, res);
 
         return res;
