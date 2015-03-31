@@ -571,7 +571,7 @@ public class Intel8086 {
      * should not use these areas for any other purpose. Doing so may make
      * these systems incompatible with future Intel products.
      */
-    private final int[]        memory = new int[1048576];
+    private final int[]        memory = new int[0x100000];
 
     /*
      * Typical 8086 Machine Instruction Format
@@ -1418,10 +1418,10 @@ public class Intel8086 {
                 al -= 6;
                 ah = ah - 1 & 0xff;
                 setFlag(CF, true);
-                setFlag(CF, true);
+                setFlag(AF, true);
             } else {
                 setFlag(CF, false);
-                setFlag(CF, false);
+                setFlag(AF, false);
             }
             al &= 0xf;
             break;
@@ -1508,7 +1508,7 @@ public class Intel8086 {
                 break; //TODO Generate a type 0 interrupt.
             ah = (al / src) & 0xff;
             al = (al % src) & 0xff;
-            setFlags(0b0, al);
+            setFlags(0b1, ah << 8 | al);
             break;
 
         /*
@@ -1571,7 +1571,7 @@ public class Intel8086 {
         case 0xd5: // AAD
             src = getMem(ip++);
             al = ah * src + al & 0xff;
-            ah = 0; 
+            ah = 0;
             setFlags(0b0, al);
             break;
 
@@ -1635,6 +1635,13 @@ public class Intel8086 {
          * cleared if the number of 1-bits is odd (the result has odd parity).
          * Note that NOT has no effect on the flags.
          */
+        /*
+         * NOT destination
+         *
+         * NOT inverts the bits (forms the one's complement) of the byte or
+         * word operand.
+         */
+
         /*
          * AND destination,source
          *
@@ -1754,6 +1761,34 @@ public class Intel8086 {
             res = dst ^ src;
             logic(w, res);
             setReg(w, 0b000, res);
+            break;
+
+        /*
+         * TEST destination,source
+         *
+         * TEST performs the logical "and" of the two operands (byte or word),
+         * updates the flags, but does not return the result, i.e., neither 
+         * operand is changed. If a TEST instruction is followed by a JNZ (jump
+         * if not zero) instruction, the jump will be taken if there are any
+         * corresponding 1-bits in both operands.
+         */
+        // Register/Memory and Register
+        case 0x84: // TEST REG8/MEM8,REG8
+        case 0x85: // TEST REG16/MEM16,REG16
+            decode();
+            dst = getRM(w, mod, rm);
+            src = getReg(w, reg);
+            logic(w, dst & src);
+            break;
+
+        // Immediate and Accumulator
+        case 0xa8: // TEST AL,IMMED8
+        case 0xa9: // TEST AX,IMMED16
+            dst = getReg(w, 0b000);
+            src = getMem(ip++);
+            if (w == 0b1)
+                src |= getMem(ip++) << 8;
+            logic(w, dst & src);
             break;
 
         /*
@@ -2241,12 +2276,16 @@ public class Intel8086 {
 
         // GROUP 3
         case 0xf6:
+            // TEST REG8/MEM8
+            // NOT REG8/MEM8
             // NEG REG8/MEM8
             // MUL REG8/MEM8
             // IMUL REG8/MEM8
             // DIV REG8/MEM8
             // IDIV REG8/MEM8
         case 0xf7:
+            // TEST REG16/MEM16
+            // NOT REG16/MEM16
             // NEG REG16/MEM16
             // MUL REG16/MEM16
             // IMUL REG16/MEM16
@@ -2255,6 +2294,15 @@ public class Intel8086 {
             decode();
             src = getRM(w, mod, rm);
             switch (reg) {
+            case 0b000: // TEST
+                dst = getMem(ip++);
+                if (w == 0b1)
+                    dst |= getMem(ip++) << 8;
+                logic(w, dst & src);
+                break;
+            case 0b010: // NOT
+                setRM(w, mod, rm, ~src);
+                break;
             case 0b011: // NEG
                 dst = sub(w, 0, src);
                 setFlag(CF, dst > 0);
@@ -2712,7 +2760,7 @@ public class Intel8086 {
      * @return the value
      */
     private int getMem(final int seg, final int addr) {
-        return memory[seg << 4 | addr];
+        return memory[(seg << 4 | addr) & 0xfffff];
     }
 
     /**
