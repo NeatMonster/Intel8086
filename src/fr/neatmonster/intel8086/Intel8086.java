@@ -71,6 +71,19 @@ public class Intel8086 {
     }
 
     /**
+     * Returns if the most significant byte of a value is set.
+     *
+     * @param w
+     *            word/byte operation
+     * @param x
+     *            the value
+     * @return true if MSB is set, false if it is cleared
+     */
+    private static boolean msb(final int w, final int x) {
+        return (x & SIGN[w]) == SIGN[w];
+    }
+
+    /**
      * Shifts left a value by a given number of positions, or right if that
      * number is negative.
      *
@@ -664,7 +677,7 @@ public class Intel8086 {
         }
 
         // Fetch instruction from memory.
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < 6; ++i)
             queue[i] = getMem(ip + i);
 
         // Decode first byte.
@@ -1792,6 +1805,112 @@ public class Intel8086 {
             break;
 
         /*
+         * Shifts
+         *
+         * The bits in bytes and words may be shifted arithmetically or
+         * logically. Up to 255 shifts may be performed, according to the value
+         * of the count operand coded in the instruction. The count may be
+         * specified as the constant l, or as register CL, allowing the shift
+         * count to be a variable supplied at execution time. Arithmetic shifts
+         * may be used to multiply and divide binary numbers by powers of two.
+         * Logical shifts can be used to isolate bits in bytes or words.
+         *
+         * Shift instructions affect the flags as follows. AF is always
+         * undefined following a shift operation. PF, SF and ZF are updated
+         * normally, as in the logical instructions. CF always contains the
+         * value of the last bit shifted out of the destination operand. The
+         * content of OF is always undefined following a multibit shift. In a
+         * single-bit shift, OF is set if the value of the high-order (sign)
+         * bit was changed by the operation; if the sign bit retains its
+         * original value, OF is cleared.
+         */
+        /*
+         * SHL/SAL destination, count
+         *
+         * SHL and SAL (Shift Logical Left and Shift Arithmetic Left) perform
+         * the same operation and are physically the same instruction. The
+         * destination byte or word is shifted left by the number of bits
+         * specified in the count operand. Zeros are shifted in on the right.
+         * If the sign bit retains its original value, then OF is cleared.
+         */
+
+        /*
+         * SHR destination, source
+         *
+         * SHR (Shift Logical Right) shifts the bits in the destination operand
+         * (byte or word) to the right by the number of bits specified in the
+         * count operand. Zeros are shifted in on the left. If the sign bit
+         * retains its original value, then OF is cleared.
+         */
+
+        /*
+         * 
+         * SAR destination, count
+         *
+         * SAR (Shift Arithmetic Right) shifts the bits in the destination
+         * operand (byte or word) to the right by the number of bits specified
+         * in the count operand. Bits equal to the original high-order (sign)
+         * bit are shifted in on the left, preserving the sign of the original
+         * value. Note that SAR does not produce the same result as the
+         * dividend of an "equivalent" IDIV instruction if the destination
+         * operand is negative and l-bits are shifted out. For example,
+         * shifting -5 right by one bit yields -3, while integer division of -5
+         * by 2 yields -2. The difference in the instructions is that IDIV
+         * truncates all numbers toward zero, while SAR truncates positive
+         * numbers toward zero and negative numbers toward negative infinity.
+         */
+
+        /*
+         * Rotates
+         *
+         * Bits in bytes and words also may be rotated. Bits rotated out of an
+         * operand are not lost as in a shift, but are "circled" back into the
+         * other "end" of the operand. As in the shift instructions, the number
+         * of bits to be rotated is taken from the count operand, which may
+         * specify either a constant of l, or the CL register. The carry flag
+         * may act as an extension of the operand in two of the rotate
+         * instructions, allowing a bit to be isolated in CF and then tested by
+         * a JC (jump if carry) or JNC (jump if not carry) instruction.
+         *
+         * Rotates affect only the carry and overflow flags. CF always contains
+         * the value of the last bit rotated out. On multibit rotates, the
+         * value of OF is always undefined. In single-bit rotates, OF is set if
+         * the operation changes the high-order (sign) bit of the destination
+         * operand. If the sign bit retains its original value, OF is cleared.
+         */
+        /*
+         * ROL destination,count
+         *
+         * ROL (Rotate Left) rotates the destination byte or word left by the
+         * number of bits specified in the count operand.
+         */
+
+        /*
+         * ROR destination,count
+         *
+         * ROR (Rotate Right) operates similar to ROL except that the bits in
+         * the destination byte or word are rotated right instead of left.
+         */
+
+        /*
+         * RCL destination,count
+         *
+         * RCL (Rotate through Carry Left) rotates the bits in the byte or word
+         * destination operand to the left by the number of bits specified in
+         * the count operand. The carry flag (CF) is treated as "part of" the
+         * destination operand; that is, its value is rotated into the
+         * low-order bit of the destination, and itself is replaced by the
+         * high-order bit of the destination.
+         */
+
+        /*
+         * RCR destination,count
+         *
+         * RCR (Rotate through Carry Right) operates exactly like RCL except
+         * that the bits are rotated right instead of left.
+         */
+
+        /*
          * Program Transfer Instructions
          *
          * The sequence of execution of instructions in an 8086 program is
@@ -2178,7 +2297,9 @@ public class Intel8086 {
         /*
          * Extensions
          */
-        // GROUP 1
+        /*
+         * GROUP 1
+         */
         case 0x80:
             // ADD REG8/MEM8,IMMED8
             // OR REG8/MEM8,IMMED8
@@ -2262,7 +2383,9 @@ public class Intel8086 {
             }
             break;
 
-        // GROUP 1A
+        /*
+         * GROUP 1A
+         */
         case 0x8f:
             // POP REG16/MEM16
             decode();
@@ -2274,7 +2397,133 @@ public class Intel8086 {
             }
             break;
 
-        // GROUP 3
+        /*
+         * GROUP 2
+         */
+        case 0xd0:
+            // ROL REG8/MEM8,1
+            // ROR REG8/MEM8,1
+            // RCL REG8/MEM8,1
+            // RCR REG8/MEM8,1
+            // SAL/SHL REG8/MEM8,1
+            // SHR REG8/MEM8,1
+            // SAR REG8/MEM8,1
+        case 0xd1:
+            // ROL REG16/MEM16,1
+            // ROR REG16/MEM16,1
+            // RCL REG16/MEM16,1
+            // RCR REG16/MEM16,1
+            // SAL/SHL REG16/MEM16,1
+            // SHR REG16/MEM16,1
+            // SAR REG16/MEM16,1
+        case 0xd2:
+            // ROL REG8/MEM8,CL
+            // ROR REG8/MEM8,CL
+            // RCL REG8/MEM8,CL
+            // RCR REG8/MEM8,CL
+            // SAL/SHL REG8/MEM8,CL
+            // SHR REG8/MEM8,CL
+            // SAR REG8/MEM8,CL
+        case 0xd3:
+            // ROL REG16/MEM16,CL
+            // ROR REG16/MEM16,CL
+            // RCL REG16/MEM16,CL
+            // RCR REG16/MEM16,CL
+            // SAL/SHL REG16/MEM16,CL
+            // SHR REG16/MEM16,CL
+            // SAR REG16/MEM16,CL
+        {
+            decode();
+            dst = getRM(w, mod, rm);
+            src = queue[0] == 0xd0 || queue[1] == 0xd1 ? 1 : cl;
+            boolean tempCF;
+            switch (reg) {
+            case 0b000: // ROL
+                for (int cnt = 0; cnt < src; ++cnt) {
+                    tempCF = msb(w, dst);
+                    dst <<= 1;
+                    dst |= tempCF ? 0b1 : 0b0;
+                    dst &= MASK[w];
+                }
+                setFlag(CF, (dst & 0b1) == 0b1);
+                if (src == 1)
+                    setFlag(OF, msb(w, dst) ^ getFlag(CF));
+                break;
+            case 0b001: // ROR
+                for (int cnt = 0; cnt < src; ++cnt) {
+                    tempCF = (dst & 0b1) == 0b1;
+                    dst >>>= 1;
+                    dst |= (tempCF ? 1 : 0) * SIGN[w];
+                    dst &= MASK[w];
+                }
+                setFlag(CF, msb(w, dst));
+                if (src == 1)
+                    setFlag(OF, msb(w, dst) ^ msb(w, dst << 1));
+                break;
+            case 0b010: // RCL
+                for (int cnt = 0; cnt < src; ++cnt) {
+                    tempCF = msb(w, dst);
+                    dst <<= 1;
+                    dst |= getFlag(CF) ? 0b1 : 0b0;
+                    dst &= MASK[w];
+                    setFlag(CF, tempCF);
+                }
+                if (src == 1)
+                    setFlag(OF, msb(w, dst) ^ getFlag(CF));
+                break;
+            case 0b011: // RCR
+                if (src == 1)
+                    setFlag(OF, msb(w, dst) ^ getFlag(CF));
+                for (int cnt = 0; cnt < src; ++cnt) {
+                    tempCF = (dst & 0b1) == 0b1;
+                    dst >>>= 1;
+                    dst |= (tempCF ? 1 : 0) * SIGN[w];
+                    dst &= MASK[w];
+                    setFlag(CF, tempCF);
+                }
+                break;
+            case 0b100: // SAL/SHL
+                for (int cnt = 0; cnt < src; ++cnt) {
+                    setFlag(CF, (dst & SIGN[w]) == SIGN[w]);
+                    dst <<= 1;
+                    dst &= MASK[w];
+                }
+                // Determine overflow.
+                if (src == 1)
+                    setFlag(OF, (dst & SIGN[w]) == SIGN[w] ^ getFlag(CF));
+                setFlags(w, dst);
+                break;
+            case 0b101: // SHR
+                // Determine overflow.
+                if (src == 1)
+                    setFlag(OF, (dst & SIGN[w]) == SIGN[w]);
+                for (int cnt = 0; cnt < src; ++cnt) {
+                    setFlag(CF, (dst & 0b1) == 0b1);
+                    dst >>>= 1;
+                    dst &= MASK[w];
+                }
+                setFlags(w, dst);
+                break;
+            case 0b111: // SAR
+                // Determine overflow.
+                if (src == 1)
+                    setFlag(OF, false);
+                for (int cnt = 0; cnt < src; ++cnt) {
+                    setFlag(CF, (dst & 0b1) == 0b1);
+                    dst = signext(w, dst);
+                    dst >>= 1;
+                    dst &= MASK[w];
+                }
+                setFlags(w, dst);
+                break;
+            }
+            setRM(w, mod, rm, dst);
+            break;
+        }
+            
+        /*
+         * GROUP 3
+         */
         case 0xf6:
             // TEST REG8/MEM8
             // NOT REG8/MEM8
@@ -2430,7 +2679,9 @@ public class Intel8086 {
             }
             break;
 
-        // GROUP 4
+        /*
+         * GROUP 4
+         */
         case 0xfe:
             // INC REG8/MEM8
             // DEC REG8/MEM8
@@ -2448,7 +2699,9 @@ public class Intel8086 {
             }
             break;
 
-        // GROUP 5
+        /*
+         * GROUP 5
+         */
         case 0xff:
             // INC REG16/MEM16
             // DEC REG16/MEM16
