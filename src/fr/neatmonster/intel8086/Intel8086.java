@@ -692,12 +692,13 @@ public class Intel8086 {
 
         // Decode first byte.
         op = queue[0] >>> 2 & 0b111111;
-        d = queue[0] >>> 1 & 0b1;
-        w = queue[0] & 0b1;
+        d  = queue[0] >>> 1 & 0b1;
+        w  = queue[0]       & 0b1;
         ++ip; // Don't forget to inc. IP.
 
         // Only repeat string instructions.
-        if (queue[0] < 0xa4 || queue[0] > 0xaf || queue[0] > 0xa7 && queue[0] < 0xaa)
+        if (rep > 0 && (queue[0] < 0xa4 || queue[0] > 0xaf
+                     || queue[0] > 0xa7 && queue[0] < 0xaa))
             rep = 0;
 
         do {
@@ -1555,8 +1556,8 @@ public class Intel8086 {
                 src = getMem(ip++);
                 if (src == 0)
                     break; //TODO Generate a type 0 interrupt.
-                ah = (al / src) & 0xff;
-                al = (al % src) & 0xff;
+                ah = al / src & 0xff;
+                al = al % src & 0xff;
                 setFlags(0b1, ah << 8 | al);
                 break;
 
@@ -1867,7 +1868,7 @@ public class Intel8086 {
              * its original value, OF is cleared.
              */
             /*
-             * SHL/SAL destination, count
+             * SHL/SAL destination,count
              *
              * SHL and SAL (Shift Logical Left and Shift Arithmetic Left)
              * perform the same operation and are physically the same
@@ -1878,7 +1879,7 @@ public class Intel8086 {
              */
 
             /*
-             * SHR destination, source
+             * SHR destination,source
              *
              * SHR (Shift Logical Right) shifts the bits in the destination
              * operand (byte or word) to the right by the number of bits
@@ -1887,9 +1888,7 @@ public class Intel8086 {
              */
 
             /*
-             *
-             *
-             * SAR destination, count
+             * SAR destination,count
              *
              * SAR (Shift Arithmetic Right) shifts the bits in the destination
              * operand (byte or word) to the right by the number of bits
@@ -2414,21 +2413,33 @@ public class Intel8086 {
              * appropriate for position-independent routines.
              */
             /*
-             * JE/JZ
+             * JO
              *
-             * Jump if equal/zero - ZF=1.
+             * Jump if overflow - OF=1.
              */
-            case 0x74: // JE/JZ SHORT-LABEL
+            case 0x70: // JO SHORT-LABEL
                 dst = getMem(ip++);
                 dst = signext(0b0, dst);
-                if (getFlag(ZF))
+                if (getFlag(OF))
+                    ip += dst;
+                break;
+
+            /*
+             * JNO
+             *
+             * Jump if not overflow - OF=0.
+             */
+            case 0x71: // JNO SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (!getFlag(OF))
                     ip += dst;
                 break;
 
             /*
              * JB/JNAE/JC
              *
-             * Jump if below/not above or equal/carry - CF=1.
+             * Jump if below/not above nor equal/carry - CF=1.
              */
             case 0x72: // JB/JNAE/JC SHORT-LABEL
                 dst = getMem(ip++);
@@ -2438,26 +2449,26 @@ public class Intel8086 {
                 break;
 
             /*
-             * JBE/JNA
+             * JNE/JAE/JNC
              *
-             * Jump if below or equal/not above - (CF or ZF)=1.
+             * Jump if not below/above or equal/not carry - CF=0.
              */
-            case 0x76: // JBE/JNA SHORT-LABEL
+            case 0x73: // JNB/JAE/JNC SHORT-LABEL
                 dst = getMem(ip++);
                 dst = signext(0b0, dst);
-                if (getFlag(CF) || getFlag(ZF))
+                if (!getFlag(CF))
                     ip += dst;
                 break;
 
             /*
-             * JS
+             * JE/JZ
              *
-             * Jump if sign - SF=1.
+             * Jump if equal/zero - ZF=1.
              */
-            case 0x78: // JS SHORT-LABEL
+            case 0x74: // JE/JZ SHORT-LABEL
                 dst = getMem(ip++);
                 dst = signext(0b0, dst);
-                if (getFlag(SF))
+                if (getFlag(ZF))
                     ip += dst;
                 break;
 
@@ -2474,14 +2485,14 @@ public class Intel8086 {
                 break;
 
             /*
-             * JNB/JAE
+             * JBE/JNA
              *
-             * Jump if not below/above or equal - CF=0.
+             * Jump if below or equal/not above - (CF or ZF)=1.
              */
-            case 0x73: // JNE/JNZ SHORT-LABEL
+            case 0x76: // JBE/JNA SHORT-LABEL
                 dst = getMem(ip++);
                 dst = signext(0b0, dst);
-                if (!getFlag(CF))
+                if (getFlag(CF) | getFlag(ZF))
                     ip += dst;
                 break;
 
@@ -2493,7 +2504,19 @@ public class Intel8086 {
             case 0x77: // JNBE/JA SHORT-LABEL
                 dst = getMem(ip++);
                 dst = signext(0b0, dst);
-                if (!getFlag(CF) && !getFlag(ZF))
+                if (!(getFlag(CF) | getFlag(ZF)))
+                    ip += dst;
+                break;
+
+            /*
+             * JS
+             *
+             * Jump if sign - SF=1.
+             */
+            case 0x78: // JS SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (getFlag(SF))
                     ip += dst;
                 break;
 
@@ -2506,6 +2529,78 @@ public class Intel8086 {
                 dst = getMem(ip++);
                 dst = signext(0b0, dst);
                 if (!getFlag(SF))
+                    ip += dst;
+                break;
+
+            /*
+             * JP/JPE
+             *
+             * Jump if parity/parity equal - PF=1.
+             */
+            case 0x7a: // JP/JPE SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (getFlag(PF))
+                    ip += dst;
+                break;
+
+            /*
+             * JNP/JPO
+             *
+             * Jump if not parity/parity odd - PF=0.
+             */
+            case 0x7b: // JNP/JPO SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (!getFlag(PF))
+                    ip += dst;
+                break;
+
+            /*
+             * JL/JNGE
+             *
+             * Jump if less/not greater nor equal - (SF xor OF)=1.
+             */
+            case 0x7c: // JL/JNGE SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (getFlag(SF) ^ getFlag(OF))
+                    ip += dst;
+                break;
+
+            /*
+             * JNL/JGE
+             *
+             * Jump if not less/greater or equal - (SF xor OF)=0.
+             */
+            case 0x7d: // JNL/JGE SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (!(getFlag(SF) ^ getFlag(OF)))
+                    ip += dst;
+                break;
+
+            /*
+             * JLE/JNG
+             *
+             * Jump if less or equal/not greater - ((SF xor OF) or ZF)=1.
+             */
+            case 0x7e: // JLE/JNG SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (getFlag(SF) ^ getFlag(OF) | getFlag(ZF))
+                    ip += dst;
+                break;
+
+            /*
+             * JNLE/JG
+             *
+             * Jump if not less nor equal/greater - ((SF xor OF) or ZF)=0.
+             */
+            case 0x7f: // JNLE/JG SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (!(getFlag(SF) ^ getFlag(OF) | getFlag(ZF)))
                     ip += dst;
                 break;
 
@@ -3065,7 +3160,7 @@ public class Intel8086 {
     private void decode() {
         mod = queue[1] >>> 6 & 0b11;
         reg = queue[1] >>> 3 & 0b111;
-        rm = queue[1] & 0b111;
+        rm  = queue[1]       & 0b111;
 
         if (mod == 0b01)
             // 8-bit displacement follows
