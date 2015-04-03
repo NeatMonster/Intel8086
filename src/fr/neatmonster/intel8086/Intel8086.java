@@ -656,24 +656,34 @@ public class Intel8086 {
      * @return has more instructions?
      */
     private boolean cycle() {
-        // Segment prefix check.
-        switch (getMem(ip++)) {
-        case 0x26: // ES: (segment override prefix)
-            os = es;
-            break;
-        case 0x2e: // CS: (segment override prefix)
-            os = cs;
-            break;
-        case 0x36: // SS: (segment override prefix)
-            os = ss;
-            break;
-        case 0x3e: // DS: (segment override prefix)
-            os = ds;
-            break;
-        default:
-            os = ds;
-            ip--;
-            break;
+        int rep = 0;
+        prefixes: while (true) {
+            // Segment prefix check.
+            switch (getMem(ip++)) {
+            case 0x26: // ES: (segment override prefix)
+                os = es;
+                break;
+            case 0x2e: // CS: (segment override prefix)
+                os = cs;
+                break;
+            case 0x36: // SS: (segment override prefix)
+                os = ss;
+                break;
+            case 0x3e: // DS: (segment override prefix)
+                os = ds;
+                break;
+            // Repetition prefix check.
+            case 0xf2: // REPNE/REPNZ
+                rep = 2;
+                break;
+            case 0xf3: // REP/REPE/REPZ
+                rep = 1;
+                break;
+            default:
+                os = ds;
+                ip--;
+                break prefixes;
+            }
         }
 
         // Fetch instruction from memory.
@@ -683,2069 +693,2350 @@ public class Intel8086 {
         // Decode first byte.
         op = queue[0] >>> 2 & 0b111111;
         d = queue[0] >>> 1 & 0b1;
-        w = queue[0] & 0b1; 
+        w = queue[0] & 0b1;
         ++ip; // Don't forget to inc. IP.
 
-        int dst, src, res = 0;
-        switch (queue[0]) {
-        /*
-         * Data Transfer Instructions
-         *
-         * The 14 data transfer instructions move single bytes and words
-         * between memory and registers as well as between registers AL or AX
-         * and I/O ports. The stack manipulation instructions are included in
-         * this group as are instructions for transferring flags contents and
-         * for loading segment registers.
-         */
-        /*
-         * General Purpose Data Transfers
-         */
-        /*
-         * MOV destination,source
-         *
-         * MOV transfers a byte or a word from the source operand to the
-         * destination operand.
-         */
-        // Register/Memory to/from Register
-        case 0x88: // MOV REG8/MEM8,REG8
-        case 0x89: // MOV REG16/MEM16,REG16
-            decode();
-            src = getReg(w, reg);
-            setRM(w, mod, rm, src);
-            break;
-        case 0x8a: // MOV REG8,REG8/MEM8
-        case 0x8b: // MOV REG16,REG16/MEM16
-            decode();
-            src = getRM(w, mod, rm);
-            setReg(w, reg, src);
-            break;
+        // Only repeat string instructions.
+        if (queue[0] < 0xa4 || queue[0] > 0xaf || queue[0] > 0xa7 && queue[0] < 0xaa)
+            rep = 0;
 
-        // Immediate to Register/Memory
-        case 0xc6: // MOV REG8/MEM8,IMMED8
-        case 0xc7: // MOV REG16/MEM16,IMMED16
-            decode();
-            switch (reg) {
-            case 0b000:
+        do {
+            if (rep > 0) {
+                int cx = ch << 8 | cl;
+
+                // Reached EOS.
+                if (cx == 0)
+                    break;
+
+                --cx;
+                cl = cx & 0xff;
+                ch = cx >> 8 & 0xff;
+            }
+
+            int dst, src, res = 0;
+            switch (queue[0]) {
+            /*
+             * Data Transfer Instructions
+             *
+             * The 14 data transfer instructions move single bytes and words
+             * between memory and registers as well as between registers AL or
+             * AX and I/O ports. The stack manipulation instructions are
+             * included in this group as are instructions for transferring flags
+             * contents and for loading segment registers.
+             */
+            /*
+             * General Purpose Data Transfers
+             */
+            /*
+             * MOV destination,source
+             *
+             * MOV transfers a byte or a word from the source operand to the
+             * destination operand.
+             */
+            // Register/Memory to/from Register
+            case 0x88: // MOV REG8/MEM8,REG8
+            case 0x89: // MOV REG16/MEM16,REG16
+                decode();
+                src = getReg(w, reg);
+                setRM(w, mod, rm, src);
+                break;
+            case 0x8a: // MOV REG8,REG8/MEM8
+            case 0x8b: // MOV REG16,REG16/MEM16
+                decode();
+                src = getRM(w, mod, rm);
+                setReg(w, reg, src);
+                break;
+
+            // Immediate to Register/Memory
+            case 0xc6: // MOV REG8/MEM8,IMMED8
+            case 0xc7: // MOV REG16/MEM16,IMMED16
+                decode();
+                switch (reg) {
+                case 0b000:
+                    src = getMem(ip++);
+                    if (w == 0b1)
+                        src |= getMem(ip++) << 8;
+                    setRM(w, mod, rm, src);
+                }
+                break;
+
+            // Immediate to Register
+            case 0xb0: // MOV AL,IMMED8
+            case 0xb1: // MOV CL,IMMED8
+            case 0xb2: // MOV DL,IMMED8
+            case 0xb3: // MOV BL,IMMED8
+            case 0xb4: // MOV AH,IMMED8
+            case 0xb5: // MOV CH,IMMED8
+            case 0xb6: // MOV DH,IMMED8
+            case 0xb7: // MOV BH,IMMED8
+            case 0xb8: // MOV AX,IMMED16
+            case 0xb9: // MOV CX,IMMED16
+            case 0xba: // MOV DX,IMMED16
+            case 0xbb: // MOV BX,IMMED16
+            case 0xbc: // MOV SP,IMMED16
+            case 0xbd: // MOV BP,IMMED16
+            case 0xbe: // MOV SI,IMMED16
+            case 0xbf: // MOV DI,IMMED16
+                w = queue[0] >>> 3 & 0b1;
+                reg = queue[0] & 0b111;
                 src = getMem(ip++);
                 if (w == 0b1)
                     src |= getMem(ip++) << 8;
-                setRM(w, mod, rm, src);
-            }
-            break;
-
-        // Immediate to Register
-        case 0xb0: // MOV AL,IMMED8
-        case 0xb1: // MOV CL,IMMED8
-        case 0xb2: // MOV DL,IMMED8
-        case 0xb3: // MOV BL,IMMED8
-        case 0xb4: // MOV AH,IMMED8
-        case 0xb5: // MOV CH,IMMED8
-        case 0xb6: // MOV DH,IMMED8
-        case 0xb7: // MOV BH,IMMED8
-        case 0xb8: // MOV AX,IMMED16
-        case 0xb9: // MOV CX,IMMED16
-        case 0xba: // MOV DX,IMMED16
-        case 0xbb: // MOV BX,IMMED16
-        case 0xbc: // MOV SP,IMMED16
-        case 0xbd: // MOV BP,IMMED16
-        case 0xbe: // MOV SI,IMMED16
-        case 0xbf: // MOV DI,IMMED16
-            w = queue[0] >>> 3 & 0b1;
-            reg = queue[0] & 0b111;
-            src = getMem(ip++);
-            if (w == 0b1)
-                src |= getMem(ip++) << 8;
-            setReg(w, reg, src);
-            break;
-
-        // Memory to Accumulator
-        case 0xa0: // MOV AL,MEM8
-        case 0xa1: // MOV AX,MEM16
-            dst = getMem(ip++);
-            dst |= getMem(ip++) << 8;
-            src = getMem(os, dst);
-            if (w == 0b1)
-                src |= getMem(os, dst + 1) << 8;
-            setReg(w, 0b000, src);
-            break;
-
-        // Accumulator to Memory
-        case 0xa2: // MOV MEM8,AL
-        case 0xa3: // MOV MEM16,AX
-            dst = getMem(ip++);
-            dst |= getMem(ip++) << 8;
-            src = getReg(w, 0b000);
-            setMem(os, dst, src & 0xff);
-            if (w == 0b1)
-                setMem(os, dst + 1, src >>> 8 & 0xff);
-            break;
-
-        // Register/Memory to Segment Register
-        case 0x8e: // MOV SEGREG,REG16/MEM16
-            decode();
-            src = getRM(0b1, mod, rm);
-            setSegReg(reg, src);
-            break;
-
-        // Segment Register to Register/Memory
-        case 0x8c: // MOV REG16/MEM16,SEGREG
-            decode();
-            src = getSegReg(reg);
-            setRM(0b1, mod, rm, src);
-            break;
-
-        /*
-         * PUSH source
-         *
-         * PUSH decrements SP (the stack pointer) by two and then transfers a
-         * word from the source operand to the top of the stack now pointer by
-         * SP. PUSH often is used to place parameters on the stack before
-         * calling a procedure; more generally, it is the basic means of
-         * storing temporary data on the stack.
-         */
-        // Register
-        case 0x50: // PUSH AX
-        case 0x51: // PUSH CX
-        case 0x52: // PUSH DX
-        case 0x53: // PUSH BX
-        case 0x54: // PUSH SP
-        case 0x55: // PUSH BP
-        case 0x56: // PUSH SI
-        case 0x57: // PUSH DI
-            reg = queue[0] & 0b111;
-            src = getReg(0b1, reg);
-            push(src);
-            break;
-
-        // Segment Register
-        case 0x06: // PUSH ES
-        case 0x0e: // PUSH CS
-        case 0x16: // PUSH SS
-        case 0x1e: // PUSH DS
-            reg = queue[0] >>> 3 & 0b111;
-            src = getSegReg(reg);
-            push(src);
-            break;
-
-        /*
-         * POP destination
-         *
-         * POP transfers the word at the current top of the stack (pointed to
-         * by the SP) to the destination operand, and then increments SP by two
-         * to point to the new top of the stack. POP can be used to move
-         * temporary variables from the stack to registers or memory.
-         */
-        // Register
-        case 0x58: // POP AX
-        case 0x59: // POP CX
-        case 0x5a: // POP DX
-        case 0x5b: // POP BX
-        case 0x5c: // POP SP
-        case 0x5d: // POP BP
-        case 0x5e: // POP SI
-        case 0x5f: // POP DI
-            reg = queue[0] & 0b111;
-            src = pop();
-            setReg(0b1, reg, src);
-            break;
-
-        // Segment Register
-        case 0x07: // POP ES
-        case 0x0f: // POP CS
-        case 0x17: // POP SS
-        case 0x1f: // POP DS
-            reg = queue[0] >>> 3 & 0b111;
-            src = pop();
-            setSegReg(reg, src);
-            break;
- 
-        /*
-         * XCHG destination,source
-         *
-         * XCHG (exchange) switches the contents of the source and destination
-         * (byte or word) operands. When used in conjunction with the LOCK
-         * prefix, XCHG can test and set a semaphore that controls access to a
-         * resource shared by multiple processors.
-         */
-        // Register/Memory with Register
-        case 0x86: // XCHG REG8,REG8/MEM8
-        case 0x87: // XCHG REG16,REG16/MEM16
-            decode();
-            dst = getReg(w, reg);
-            src = getRM(w, mod, rm);
-            setReg(w, reg, src);
-            setRM(w, mod, rm, dst);
-            break;
-
-        // Register with Accumulator
-        case 0x91: // XCHG AX,CX
-        case 0x92: // XCHG AX,DX
-        case 0x93: // XCHG AX,BX
-        case 0x94: // XCHG AX,SP
-        case 0x95: // XCHG AX,BP
-        case 0x96: // XCHG AX,SI
-        case 0x97: // XCHG AX,DI
-            reg = queue[0] & 0b111;
-            dst = getReg(0b1, 0b000);
-            src = getReg(0b1, reg);
-            setReg(0b1, 0b000, src);
-            setReg(0b1, reg, dst);
-            break;
-
-        /*
-         * XLAT translate-table
-         *
-         * XLAT (translate) replaces a byte in the AL register with a byte from
-         * a 256-byte, user-coded translation table. Register BX is assumed to
-         * point to the beginning of the table. The byte in AL is used as an
-         * index into the table and is replaced by the byte at the offset in
-         * the table corresponding to AL's binary value. The first byte in the
-         * table has an offset of 0. For example, if AL contains 5H, and the
-         * sixth element of the translation table contains 33H, then AL will
-         * contain 33H following the instruction. XLAT is useful for
-         * translating characters from one code to another, the classic example
-         * being ASCII to EBCDIC or the reverse.
-         */
-        case 0xd7: // XLAT SOURCE-TABLE
-            al = getMem(os, (bh << 8 | bl) + al);
-            break;
-
-        /*
-         * Address Object Transfers
-         *
-         * The instructions manipulate the addresses of the variables rather
-         * than the contents or values of variables. They are most useful for
-         * list processing, based variables, and string operations.
-         */
-        /*
-         * LEA destination,source
-         *
-         * LEA (load effective address) transfers the offset of the source
-         * operand (rather than its value) to the destination operand. The
-         * source must be a memory operand, and the destination operand must be
-         * a 16-bit general register. LEA does not affect any flags. The XLAT
-         * and string instructions assume that certain registers point to
-         * operands; LEA can be used to load these register (e.g., loading BX
-         * with the address of the translate table used by the XLAT
-         * instruction).
-         */
-        case 0x8d: // LEA REG16,MEM16
-            decode();
-            src = getEA(mod, rm) - (os << 4);
-            setReg(w, reg, src);
-            break;
-
-        /*
-         * LDS destination,source
-         *
-         * LDS (load pointer using DS) transfers a 32-bit pointer variable from
-         * the source operand, which must be a memory operand, to the
-         * destination operand and register DS. The offset word of the pointer
-         * is transferred to the destination operand, which may be any 16-bit
-         * general register. The segment word of the pointer is transferred to
-         * register DS. Specifying SI as the destination operand is a
-         * convenient way to prepare to process a source string that is not in
-         * the current data segment (string instructions assume that the source
-         * string is located in the current data segment and that SI contains
-         * the offset of the string).
-         */
-        case 0xc5: // LDS REG16,MEM16
-            decode();
-            src = getEA(mod, rm);
-            setReg(w, reg, memory[src + 1] << 8 | memory[src]);
-            ds = memory[src + 3] << 8 | memory[src + 2];
-            break;
-
-        /*
-         * LES destination,source
-         *
-         * LES (load pointer using ES) transfers a 32-bit pointer variable from
-         * the source operand, which must be a memory operand, to the
-         * destination operand and register ES. The offset word of the pointer
-         * is transferred to the destination operand, which may be any 16-bit
-         * general register. The segment word of the pointer is transferred to
-         * register ES. Specifying DI as the destination operand is a
-         * convenient way to prepare to process a destination string that is
-         * not in the current extra segment. (The destination string must be
-         * located in the extra segment, and DI must contain the offset of the
-         * string).
-         */
-        case 0xc4: // LES REG16,MEM16
-            decode();
-            src = getEA(mod, rm);
-            setReg(w, reg, memory[src + 1] << 8 | memory[src]);
-            es = memory[src + 3] << 8 | memory[src + 2];
-            break;
-
-        /*
-         * Flag Transfers
-         */
-        /*
-         * LAHF
-         *
-         * LAHF (load register AH from flags) copies SF, ZF, AF, PF and CF into
-         * the bits 7, 6, 4, 2 and 0, respectively, of register AH. The content
-         * of bits 5, 3 and 1 is undefined; the flags themselves are not
-         * affected. LAHF is provided primarily for converting 8080/8085
-         * assembly language programs to run on an 8086.
-         */
-        case 0x9f: // LAHF
-            ah = flags & 0xff;
-            break;
-
-        /*
-         * SAHF
-         *
-         * SAHF (store register AH into flags) transfers bits 7, 6, 4, 2 and 0
-         * from register AH into SF, ZF, AF, PF and CF, respectively, replacing
-         * whatever values these flags previously had. OF, DF, IF and TF are
-         * not affected. This instruction is provided from 8080/8085
-         * compatibility.
-         */
-        case 0x9e: // SAHF
-            flags = flags & 0xff00 | ah;
-            break;
-
-        /*
-         * PUSHF
-         *
-         * PUSH decrements SP (the stack pointer) by two and then transfers all
-         * flags to the word at the top of stack pointed to by SP. The flags
-         * themselves are not affected.
-         */
-        case 0x9c: // PUSHF
-            push(flags);
-            break;
-
-        /*
-         * POPF
-         *
-         * POPF transfers specific bits from the word at the current top of
-         * stack (pointed to by register SP) into the 8086 flags, replacing
-         * whatever values the flags previously contained. SP is then
-         * incremented by two to point at the new top of stack. PUSHF and POPF
-         * allow a procedure to save and restore a calling program's flags.
-         * They also allow a program to change the setting of TF (there is no
-         * instruction for updating this flag directly). The change is
-         * accomplished by pushing the flags, altering bit 8 of the memory-
-         * image and then popping the flags.
-         */
-        case 0x9d: // POPF
-            flags = pop();
-            break;
-
-        /*
-         * Arithmetic Instructions
-         *
-         * Arithmetic Data Formats
-         *
-         * 8086 arithmetic operations may be performed on four types of
-         * numbers: unsigned binary, signed binary (integers), unsigned packed
-         * decimal and unsigned unpacked decimal. Binary numbers may be 8 or 16
-         * bits long. Decimal numbers are stored in bytes, two digits per byte
-         * for packed decimals and one digit per byte for unpacked decimal. The
-         * processor always assumes that the operands specified in arithmetic
-         * instructions contain data that represents valid numbers for the type
-         * of instructions being performed. Invalid data may produce
-         * unpredictable results.
-         *
-         * Unsigned binary numbers may be either 8 or 16 bits long; all bits
-         * are considered in determining a number's magnitude. The value range
-         * of an 8-bit unsigned binary number is 0-255; 16 bits can represent
-         * values from 0 through 65,535. Addition, subtraction, multiplication
-         * and division operations are available for unsigned binary numbers.
-         *
-         * Signed binary numbers (integer) may be either 8 or 16 bits long. The
-         * high-order (leftmost) bit is interpreted as the number's sign: 0 =
-         * positive and 1 = negative. Negative numbers are represented in
-         * standard two's complement notation. Since the high-order is used for
-         * a sign, the range of an 8-bit integer is -128 through +127; 16-bit
-         * integer may range from -32,768 through +32,767. The value zero has a
-         * positive sign. Multiplication and division operations are provided
-         * for signed binary numbers. Addition and subtraction are performed
-         * with the unsigned binary instructions. Conditional jump
-         * instructions, as well as an "interrupt on overflow" instruction, can
-         * be used following an unsigned operation on an integer to detect
-         * overflow into the sign bit.
-         *
-         * Packed decimal numbers are stored as unsigned byte quantities. The
-         * byte is treated as having one decimal digit in each half-byte
-         * (nibble); the digit in the high-order half-byte is the most
-         * significant. Hexadecimal values 0-9 are valid in each half-byte, and
-         * the range of a packed decimal number is 0-99. Addition and
-         * subtraction are performed in two steps. First an unsigned binary
-         * instruction is used to produce an intermediate result in register
-         * AL. The an adjustment operation is performed which changes the
-         * intermediate value in AL to a final correct packed decimal result.
-         * Multiplication and division adjustments are not available for packed
-         * decimal numbers.
-         *
-         * Unpacked decimal numbers are stored as unsigned byte quantities. The
-         * magnitude of the number is determined from the low-order half-byte;
-         * hexadecimal values 0-9 are valid and are interpreted as decimal
-         * numbers. The high-order half-byte must be zero for multiplication
-         * and division; it may contain any value from addition and
-         * subtraction. Arithmetic on unpacked decimal numbers is performed in
-         * two steps. The unsigned binary addition, subtraction and
-         * multiplication operations are used to produce an intermediate result
-         * in register AL. An adjustment instruction then changes the value in
-         * AL to a final correct unpacked decimal number. Division is performed
-         * similarly, except that the adjustment is carried out on the
-         * numerator operand in register AL first, then a following unsigned
-         * binary division instruction produces a correct result.
-         *
-         * Unpacked decimal numbers are similar to the ASCII character
-         * representations of the digits 0-9. Note, however, that the high-
-         * order half-byte of an ASCII numeral is always 3H. Unpacked decimal
-         * arithmetic may be performed on ASCII number characters under the
-         * following conditions:
-         * - the high-order half-byte of an ASCII numeral must be set to 0H
-         * prior to multiplication or division.
-         * - unpacked decimal arithmetic leaves the high-order half-byte set to
-         * 0H; it must be set to 3H to produce a valid ASCII numeral.
-         *
-         * Arithmetic Instructions and Flags
-         *
-         * The 8086 arithmetic instructions post certain characteristics of the
-         * result of the operation to six flags. Most of these flags can be
-         * tested by following the arithmetic instruction with a conditional
-         * jump instruction; the INTO (interrupt on overflow) instruction may
-         * also be used. The various instructions affect the flags differently,
-         * as explained in the instruction descriptions.
-         */
-        /*
-         * Addition
-         */
-        /*
-         * ADD destination,source
-         *
-         * The sum of the two operands, which may be bytes or words, replaces
-         * the destination operand. Both operands may be signed or unsigned
-         * binary numbers. ADD updates AF, CF, OF, PF, SF and ZF.
-         */
-        // Reg./Memory and Register to Either
-        case 0x00: // ADD REG8/MEM8,REG8
-        case 0x01: // ADD REG16/MEM16,REG16
-            decode();
-            dst = getRM(w, mod, rm);
-            src = getReg(w, reg);
-            res = add(w, dst, src);
-            setRM(w, mod, rm, res);
-            break;
-        case 0x02: // ADD REG8,REG8/MEM8
-        case 0x03: // ADD REG16,REG16/MEM16
-            decode();
-            dst = getReg(w, reg);
-            src = getRM(w, mod, rm);
-            res = add(w, dst, src);
-            setReg(w, reg, res);
-            break;
-
-        // Immediate to Accumulator
-        case 0x04: // ADD AL,IMMED8
-        case 0x05: // ADD AX,IMMED16
-            dst = getReg(w, 0);
-            src = getMem(ip++);
-            if (w == 0b1)
-                src |= getMem(ip++) << 8;
-            res = add(w, dst, src);
-            setReg(w, 0b000, res);
-            break;
-
-        /*
-         * ADC destination,source
-         *
-         * ADC (Add with Carry) sums the operands, which may be bytes or words,
-         * adds one if CF is set and replaces the destination operand with the
-         * result. Both operands may be signed or unsigned binary numbers. ADC
-         * updates AF, CF, OF, PF, SF and ZF. Since ADC incorporates a carry
-         * from a previous operation, it can be used to write routines to add
-         * numbers longer than 16 bits.
-         */
-        // Reg./Memory with Register to Either
-        case 0x10: // ADC REG8/MEM8,REG8
-        case 0x11: // ADC REG16/MEM16,REG16
-            decode();
-            dst = getRM(w, mod, rm);
-            src = getReg(w, reg);
-            res = adc(w, dst, src);
-            setRM(w, mod, rm, res);
-            break;
-        case 0x12: // ADC REG8,REG8/MEM8
-        case 0x13: // ADC REG16,REG16/MEM16
-            decode();
-            dst = getReg(w, reg);
-            src = getRM(w, mod, rm);
-            res = adc(w, dst, src);
-            setReg(w, reg, res);
-            break;
-
-        // Immediate to Accumulator
-        case 0x14: // ADC AL,IMMED8
-        case 0X15: // ADC AX,IMMED16
-            dst = getReg(w, 0b000);
-            src = getMem(ip++);
-            if (w == 0b1)
-                src |= getMem(ip++) << 8;
-            res = adc(w, dst, src);
-            setReg(w, 0b000, res);
-            break;
-
-        /*
-         * INC destination
-         *
-         * INC (Increment) adds one to the destination operand. The operand may
-         * be a byte or a word and is treated as an unsigned binary number. INC
-         * updates AF, OF, PF, SF and ZF; it does not affect CF.
-         */
-        // Register
-        case 0x40: // INC AX
-        case 0x41: // INC CX
-        case 0x42: // INC DX
-        case 0x43: // INC BX
-        case 0x44: // INC SP
-        case 0x45: // INC BP
-        case 0x46: // INC SI
-        case 0x47: // INC DI
-            reg = queue[0] & 0b111;
-            src = getReg(0b1, reg);
-            res = inc(0b1, src);
-            setReg(0b1, reg, res);
-            break;
-
-        /*
-         * AAA
-         *
-         * AAA (ASCII Adjust for Addition) changes the contents of register AL
-         * to a valid unpacked decimal number; the high-order half-byte is
-         * zeroed. AAA updates AF and CF; the content of OF, PF, SF and ZF is
-         * undefined following execution of AAA.
-         */
-        case 0x37: // AAA
-            if ((al & 0xf) > 9 || getFlag(AF)) {
-                al += 6;
-                ah = ah + 1 & 0xff;
-                setFlag(CF, true);
-                setFlag(AF, true);
-            } else {
-                setFlag(CF, false);
-                setFlag(AF, false);
-            }
-            al &= 0xf;
-            break;
-
-        /*
-         * DAA
-         *
-         * DAA (Decimal Adjust for Addition) corrects the result of previously
-         * adding two valid packed decimal operands (the destination operand
-         * must have been register AL). DAA changes the content of AL to a pair
-         * of valid packed decimal digits. It updates AF, CF, PF, SF and ZF;
-         * the content of OF is undefined following execution of DAA.
-         */
-        case 0x27: { // DAA
-            final int oldAL = al;
-            final boolean oldCF = getFlag(CF);
-            setFlag(CF, false);
-            if ((al & 0xf) > 9 || getFlag(AF)) {
-                al += 6;
-                setFlag(CF, oldCF || al < 0);
-                al &= 0xff;
-                setFlag(AF, true);
-            } else
-                setFlag(AF, false);
-            if (oldAL > 0x99 || oldCF) {
-                al = al + 0x60 & 0xff;
-                setFlag(CF, true);
-            } else
-                setFlag(CF, false);
-            setFlags(0b0, al);
-            break;
-        }
-
-        /*
-         * Subtraction
-         */
-        /*
-         * SUB destination,source
-         *
-         * The source operand is subtracted from the destination operand, and
-         * the result replaces the destination operand. The operands may be
-         * bytes or words. Both operands may be signed or unsigned binary
-         * numbers. SUB updates AF, CF, OF, PF, SF and ZF.
-         */
-        // Reg./Memory and Register to Either
-        case 0x28: // SUB REG8/MEM8,REG8
-        case 0x29: // SUB REG16/MEM16,REG16
-            decode();
-            dst = getRM(w, mod, rm);
-            src = getReg(w, reg);
-            res = sub(w, dst, src);
-            setRM(w, mod, rm, res);
-            break;
-        case 0x2a: // SUB REG8,REG8/MEM8
-        case 0x2b: // SUB REG16,REG16/MEM16
-            decode();
-            dst = getReg(w, reg);
-            src = getRM(w, mod, rm);
-            res = sub(w, dst, src);
-            setReg(w, reg, res);
-            break;
-
-        // Immediate from Accumulator
-        case 0x2c: // SUB AL,IMMED8
-        case 0x2d: // SUB AX,IMMED16
-            dst = getReg(w, 0b000);
-            src = getMem(ip++);
-            if (w == 0b1)
-                src |= getMem(ip++) << 8;
-            res = sub(w, dst, src);
-            setReg(w, 0b000, res);
-            break;
-
-        /*
-         * SBB destination,source
-         *
-         * SBB (Subtract with Borrow) subtracts the source from the
-         * destination, subtracts one if CF is set, and returns the result to
-         * the destination operand. Both operands may be bytes or words. Both
-         * operands may be signed or unsigned binary numbers. SBB updates AF,
-         * CF, OF, PF, SF and ZF. Since it incorporates a borrow from a
-         * previous operation, SBB may be used to write routines that subtract
-         * numbers longer than 16 bits.
-         */
-        // Reg./Memory with Register to Either
-        case 0x18: // SBB REG8/MEM8,REG8
-        case 0x19: // SBB REG16/MEM16,REG16
-            decode();
-            dst = getRM(w, mod, rm);
-            src = getReg(w, reg);
-            res = sbb(w, dst, src);
-            setRM(w, mod, rm, res);
-            break;
-        case 0x1a: // SBB REG8,REG8/MEM8
-        case 0x1b: // SBB REG16,REG16/MEM16
-            decode();
-            dst = getReg(w, reg);
-            src = getRM(w, mod, rm);
-            res = sbb(w, dst, src);
-            setReg(w, reg, res);
-            break;
-
-        // Immediate to Accumulator
-        case 0x1c: // SBB AL,IMMED8
-        case 0X1d: // SBB AX,IMMED16
-            dst = getReg(w, 0b000);
-            src = getMem(ip++);
-            if (w == 0b1)
-                src |= getMem(ip++) << 8;
-            res = sbb(w, dst, src);
-            setReg(w, 0b000, res);
-            break;
-
-        /*
-         * DEC destination
-         *
-         * DEC (Decrement) subtracts one from the destination, which may be a
-         * byte or a word. DEC updates AF, OF, PF, SF, and ZF; it does not
-         * affect CF.
-         */
-        // Register
-        case 0x48: // DEC AX
-        case 0x49: // DEC CX
-        case 0x4a: // DEC DX
-        case 0x4b: // DEC BX
-        case 0x4c: // DEC SP
-        case 0x4d: // DEC BP
-        case 0x4e: // DEC SI
-        case 0x4f: // DEC DI
-            reg = queue[0] & 0b111;
-            dst = getReg(0b1, reg);
-            res = dec(0b1, dst);
-            setReg(0b1, reg, res);
-            break;
-
-        /*
-         * NEG destination
-         *
-         * NEG (Negate) subtracts the destination operand, which may be a byte
-         * or a word, from 0 and returns the result to the destination. This
-         * forms the two's complement of the number, effectively reversing the
-         * sign of an integer. If the operand is zero, its sign is not changed.
-         * Attempting to negate a byte containing -128 or a word containing
-         * -32,768 causes no change to the operand and sets OF. NEG updates AF,
-         * CF, OF, PF, SF and ZF. CF is always set except when the operand is
-         * zero, in which case it is cleared.
-         */
-
-        /*
-         * CMP destination,source
-         *
-         * CMP (Compare) subtracts the source from the destination, which may
-         * be bytes or words, but does not return the result. The operands are
-         * unchanged, but the flags are updated and can be tested by the
-         * subsequent conditional jump instructions. CMP updates AF, CF, OF,
-         * PF, SF and ZF. The comparison reflected in the flags is that of the
-         * destination to the source. If a CMP instruction is followed by a JG
-         * (jump if greater) instruction, for example, the jump is taken if the
-         * destination operand is greater than the source operand.
-         */
-        // Register/Memory and Register
-        case 0x38: // CMP REG8/MEM8,REG8
-        case 0x39: // CMP REG16/MEM16,REG16
-            decode();
-            dst = getRM(w, mod, rm);
-            src = getReg(w, reg);
-            sub(w, dst, src);
-            break;
-        case 0x3a: // CMP REG8,REG8/MEM8
-        case 0x3b: // CMP REG16,REG16/MEM16
-            decode();
-            dst = getReg(w, reg);
-            src = getRM(w, mod, rm);
-            sub(w, dst, src);
-            break;
-
-        // Immediate with Accumulator
-        case 0x3c: // CMP AL,IMMED8
-        case 0x3d: // CMP AX,IMMED16
-            dst = getReg(w, 0b000);
-            src = getMem(ip++);
-            if (w == 0b1)
-                src |= getMem(ip++) << 8;
-            sub(w, dst, src);
-            break;
-
-        /*
-         * AAS
-         *
-         * AAS (ASCII Adjust for Subtraction) corrects the result of a previous
-         * subtraction of two valid unpacked decimal operands (the destination
-         * operand must have been specified as register AL). AAS changes the
-         * content of AL to a valid unpacked decimal number; the high-order
-         * half-byte is zeroed. AAS updates AF and CF; the content of OF, PF,
-         * SF and ZF is undefined following execution of AAS.
-         */
-        case 0x3f: // AAS
-            if ((al & 0xf) > 9 || getFlag(AF)) {
-                al -= 6;
-                ah = ah - 1 & 0xff;
-                setFlag(CF, true);
-                setFlag(AF, true);
-            } else {
-                setFlag(CF, false);
-                setFlag(AF, false);
-            }
-            al &= 0xf;
-            break;
-
-        /*
-         * DAS
-         *
-         * DAS (Decimal Adjust for Subtraction) corrects the result of a
-         * previous subtraction of two valid packed decimal operands (the
-         * destination operand must have been specified as register AL). DAS
-         * changes the content of AL to a pair of valid packed decimal digits.
-         * DAS updates AF, CF, PF, SF and ZF; the content of OF is undefined
-         * following the execution of DAS.
-         */
-        case 0x2f: // DAS
-        {
-            final int oldAL = al;
-            final boolean oldCF = getFlag(CF);
-            setFlag(CF, false);
-            if ((al & 0xf) > 9 || getFlag(AF)) {
-                al -= 6;
-                setFlag(CF, oldCF || (al & 0xff) > 0);
-                al &= 0xff;
-                setFlag(AF, true);
-            } else
-                setFlag(AF, false);
-            if (oldAL > 0x99 || oldCF) {
-                al = al - 0x60 & 0xff;
-                setFlag(CF, true);
-            } else
-                setFlag(CF, false);
-            setFlags(0b0, al);
-            break;
-        }
-
-        /*
-         * Multiplication
-         */
-        /*
-         * MUL source
-         *
-         * MUL (Multiply) performs an unsigned multiplication of the source
-         * operand and the accumulator. If the source is a byte, then it is
-         * multiplied by register AL, and the double-length result is returned
-         * in AH and AL. If the source operand is a word, then it is multiplied
-         * by register AX, and the double-length result is returned in
-         * registers DX and AX. The operands are treated as unsigned binary
-         * numbers. If the upper half of the result (AH for byte source, DX for
-         * word source) is nonzero, CF and OF are set; otherwise they are
-         * cleared. When CF and OF are set, they indicate that AH or DX
-         * contains significant digits of the result. The content of AF, PF, SF
-         * and ZF is undefined following execution of MUL.
-         */
-
-        /*
-         * IMUL source
-         *
-         * IMUL (Integer Multiply) performs a signed multiplication of the
-         * source operand and the accumulator. If the source is a byte, then it
-         * is multiplied by register AL, and the double-length result is
-         * returned in AH and AL. If the source is a word, then it is
-         * multiplied by register AX, and the double-length result is returned
-         * in registers DX and AX. If the upper half of the result (AH for byte
-         * source, DX for word source) is not the sign extension of the lower
-         * half of the result, CF and OF are set, they indicate that AH of DX
-         * contains significant digits of the result. The content of AF, PF, SF
-         * and ZF is undefined following execution of IMUL.
-         */
-
-        /*
-         * AAM
-         *
-         * AAM (ASCII Adjust for Multiply) corrects the result of a previous
-         * multiplication of two valid unpacked decimal operands. A valid 2-
-         * digit unpacked decimal number is derived from the content of AH and
-         * AL and is returned to AH and AL. The high-order half-bytes of the
-         * multiplied operands must have been 0H for AAM to produce a correct
-         * result. AAM updates PF, SF and ZF; the content of AF, CF and OF is
-         * undefined following execution of AAM.
-         */
-        case 0xd4: // AAM
-            src = getMem(ip++);
-            if (src == 0)
-                break; //TODO Generate a type 0 interrupt.
-            ah = (al / src) & 0xff;
-            al = (al % src) & 0xff;
-            setFlags(0b1, ah << 8 | al);
-            break;
-
-        /*
-         * Division
-         */
-        /*
-         * DIV source
-         *
-         * DIV (divide) performs an unsigned division of the accumulator (and
-         * its extension) by the source operand. If the source operand is a
-         * byte, it is divided into the double-length dividend assumed to be in
-         * register AL and AH. The single-length quotient is returned in AL,
-         * and the single-length remainder is returned in AH. If the source
-         * operand is a word, it is divided into the double-length dividend in
-         * register AX and DX. The single-length quotient is returned in AX,
-         * and the single-length remainder is returned in DX. If the quotient
-         * exceeds the capacity of its destination register (FFH for byte
-         * source, FFFFH for word source), as when division by zero is
-         * attempted, a type 0 interrupt is generated, and the quotient and
-         * remainder are undefined. Nonintegral quotients are truncated to
-         * integers. The content of AF, CF, OF, PF, SF and ZF is undefined
-         * following execution of DIV.
-         */
-
-        /*
-         * IDIV source
-         *
-         * IDIV (Integer Divide) performs a signed division of the accumulator
-         * (and its extension) by the source operand. If the source operand is
-         * a byte, it is divided into the double-length dividend assumed to be
-         * in register AL and AH; the single-length quotient is returned in AL,
-         * and the single-length remainder is returned in AH. For byte integer
-         * division, the maximum position quotient is +127 (7FH) and the
-         * minimum negative quotient is -127 (81H). If the source operand is a
-         * word, it is divided into the double-length dividend in register AX
-         * and DX; the single-length quotient is returned in AX, and the
-         * single-length remainder is returned in DX. For word integer
-         * division, the maximum positive quotient is +32,767 (7FFFH) and the
-         * minimum negative quotient is -32,767 (8001H). If the quotient is
-         * positive and exceeds the maximum, or is negative and is less than
-         * the minimum, the quotient and remainder are undefined, and a type 0
-         * interrupt is generated. In particular, this occurs if division by 0
-         * is attempted. Nonintegral quotients are truncated (toward 0) to
-         * integers, and the remainder has the same sign as the dividend. The
-         * content of AF, CF, OF, PF, SF and ZF is undefined following IDIV.
-         */
-
-        /*
-         * AAD
-         *
-         * AAD (ASCII Adjust for Division) modifies the numerator in AL before
-         * dividing two valid unpacked decimal operands so that the quotient
-         * produced by the division will be a valid unpacked decimal number. AH
-         * must be zero for the subsequent DIV to produce the correct result.
-         * The quotient is returned in AL, and the remainder is returned in AH;
-         * both high-order half-bytes are zeroed. AAD updates PF, SF and ZF;
-         * the content of AF, CF and OF is undefined following execution of
-         * AAD.
-         */
-        case 0xd5: // AAD
-            src = getMem(ip++);
-            al = ah * src + al & 0xff;
-            ah = 0;
-            setFlags(0b0, al);
-            break;
-
-        /*
-         * CBW
-         *
-         * CBW (Convert Byte to Word) extends the sign of the byte in register
-         * AL throughout register AH. CBW does not affect any flags. CBW can be
-         * used to produce a double-length (word) dividend from a byte prior to
-         * performing byte division.
-         */
-        case 0x98: // CBW
-            if ((al & 0x80) == 0x80)
-                ah = 0xff;
-            else
-                ah = 0x00;
-            break;
-
-        /*
-         * CWD
-         *
-         * CWD (Convert Word to Doubleword) extends the sign of the word in
-         * register AX throughout register DX. CWD does not affect any flags.
-         * CWD can be used to produce a double-length (doubleword) dividend
-         * from a word prior to performing word division.
-         */
-        case 0x99: // CWD
-            if ((ah & 0x80) == 0x80) {
-                dl = 0xff;
-                dh = 0xff;
-            } else {
-                dl = 0x00;
-                dh = 0x00;
-            }
-            break;
-
-        /*
-         * Bit Manipulation Instructions
-         *
-         * The 8086 provides three groups of instructions for manipulating bits
-         * within both bytes and words: logical, shifts and rotates.
-         */
-        /*
-         * Logical
-         *
-         * The logical instructions include the boolean operators "not," "and,"
-         * "inclusive or," and "exclusive or," plus a TEST instruction that
-         * sets the flags, but does not alter either of its operands.
-         *
-         * AND, OR, XOR and TEST affect the flags as follows: the overflow (OF)
-         * and carry (CF) flags are always cleared by logical instructions, and
-         * the content of the auxiliary carry (AF) flag is always undefined
-         * following execution of a logical instruction. The sign (SF), zero
-         * (ZF) and parity (PF) flags are always posted to reflect the result
-         * of the operation and can be tested by conditional jump instructions.
-         * The interpretation of these flags is the same as for arithmetic
-         * instructions. SF is set if the result is negative (high-order bit is
-         * 1), and is cleared if the result is positive (high-order bit is 0).
-         * ZF is set if the result is zero, cleared otherwise. PF is set if the
-         * result contains an even number of 1-bits (has even parity) and is
-         * cleared if the number of 1-bits is odd (the result has odd parity).
-         * Note that NOT has no effect on the flags.
-         */
-        /*
-         * NOT destination
-         *
-         * NOT inverts the bits (forms the one's complement) of the byte or
-         * word operand.
-         */
-
-        /*
-         * AND destination,source
-         *
-         * AND performs the logical "and" of the two operands (byte or word)
-         * and returns the result to the destination operand. A bit in the
-         * result is set if both corresponding bits of the original operands
-         * are set; otherwise the bit is cleared.
-         */
-        // Register/Memory and Register
-        case 0x20: // AND REG8/MEM8,REG8
-        case 0x21: // AND REG16/MEM16,REG16
-            decode();
-            dst = getRM(w, mod, rm);
-            src = getReg(w, reg);
-            res = dst & src;
-            logic(w, res);
-            setRM(w, mod, rm, res);
-            break;
-        case 0x22: // AND REG8,REG8/MEM8
-        case 0x23: // AND REG16,REG16/MEM16
-            decode();
-            dst = getReg(w, reg);
-            src = getRM(w, mod, rm);
-            res = dst & src;
-            logic(w, res);
-            setReg(w, reg, res);
-            break;
-
-        // Immediate to Accumulator
-        case 0x24: // AND AL,IMMED8
-        case 0x25: // AND AX,IMMED16
-            dst = getReg(w, 0b000);
-            src = getMem(ip++);
-            if (w == 0b1)
-                src |= getMem(ip++) << 8;
-            res = dst & src;
-            logic(w, res);
-            setReg(w, 0b000, res);
-            break;
-
-        /*
-         * OR destination,source
-         *
-         * OR performs the logical "inclusive or" of the two operands (byte or
-         * word) and returns the result to the destination operand. A bit in
-         * the result is set if either or both corresponding bits of the
-         * original operands are set; otherwise the result bit is cleared.
-         */
-        // Register/Memory and Register
-        case 0x08: // OR REG8/MEM8,REG8
-        case 0x09: // OR REG16/MEM16,REG16
-            decode();
-            dst = getRM(w, mod, rm);
-            src = getReg(w, reg);
-            res = dst | src;
-            logic(w, res);
-            setRM(w, mod, rm, res);
-            break;
-        case 0x0a: // OR REG8,REG8/MEM8
-        case 0x0b: // OR REG16,REG16/MEM16
-            decode();
-            dst = getReg(w, reg);
-            src = getRM(w, mod, rm);
-            res = dst | src;
-            logic(w, res);
-            setReg(w, reg, res);
-            break;
-
-        // Immediate to Accumulator
-        case 0x0c: // OR AL,IMMED8
-        case 0x0d: // OR AX,IMMED16
-            dst = getReg(w, 0b000);
-            src = getMem(ip++);
-            if (w == 0b1)
-                src |= getMem(ip++) << 8;
-            res = dst | src;
-            logic(w, res);
-            setReg(w, 0b000, res);
-            break;
-
-        /*
-         * XOR destination,source
-         *
-         * XOR (Exclusive Or) performs the logical "exclusive or" of the two
-         * operands and returns the result to the destination operand. A bit in
-         * the result if set if the corresponding bits of the original operands
-         * contain opposite values (one is set, the other is cleared);
-         * otherwise the result bit is cleared.
-         */
-        // Register/Memory and Register
-        case 0x30: // XOR REG8/MEM8,REG8
-        case 0x31: // XOR REG16/MEM16,REG16
-            decode();
-            dst = getRM(w, mod, rm);
-            src = getReg(w, reg);
-            res = dst ^ src;
-            logic(w, res);
-            setRM(w, mod, rm, res);
-            break;
-        case 0x32: // XOR REG8,REG8/MEM8
-        case 0x33: // XOR REG16,REG16/MEM16
-            decode();
-            dst = getReg(w, reg);
-            src = getRM(w, mod, rm);
-            res = dst ^ src;
-            logic(w, res);
-            setReg(w, reg, res);
-            break;
-
-        // Immediate to Accumulator
-        case 0x34: // XOR AL,IMMED8
-        case 0x35: // XOR AX,IMMED16
-            dst = getReg(w, 0b000);
-            src = getMem(ip++);
-            if (w == 0b1)
-                src |= getMem(ip++) << 8;
-            res = dst ^ src;
-            logic(w, res);
-            setReg(w, 0b000, res);
-            break;
-
-        /*
-         * TEST destination,source
-         *
-         * TEST performs the logical "and" of the two operands (byte or word),
-         * updates the flags, but does not return the result, i.e., neither 
-         * operand is changed. If a TEST instruction is followed by a JNZ (jump
-         * if not zero) instruction, the jump will be taken if there are any
-         * corresponding 1-bits in both operands.
-         */
-        // Register/Memory and Register
-        case 0x84: // TEST REG8/MEM8,REG8
-        case 0x85: // TEST REG16/MEM16,REG16
-            decode();
-            dst = getRM(w, mod, rm);
-            src = getReg(w, reg);
-            logic(w, dst & src);
-            break;
-
-        // Immediate and Accumulator
-        case 0xa8: // TEST AL,IMMED8
-        case 0xa9: // TEST AX,IMMED16
-            dst = getReg(w, 0b000);
-            src = getMem(ip++);
-            if (w == 0b1)
-                src |= getMem(ip++) << 8;
-            logic(w, dst & src);
-            break;
-
-        /*
-         * Shifts
-         *
-         * The bits in bytes and words may be shifted arithmetically or
-         * logically. Up to 255 shifts may be performed, according to the value
-         * of the count operand coded in the instruction. The count may be
-         * specified as the constant l, or as register CL, allowing the shift
-         * count to be a variable supplied at execution time. Arithmetic shifts
-         * may be used to multiply and divide binary numbers by powers of two.
-         * Logical shifts can be used to isolate bits in bytes or words.
-         *
-         * Shift instructions affect the flags as follows. AF is always
-         * undefined following a shift operation. PF, SF and ZF are updated
-         * normally, as in the logical instructions. CF always contains the
-         * value of the last bit shifted out of the destination operand. The
-         * content of OF is always undefined following a multibit shift. In a
-         * single-bit shift, OF is set if the value of the high-order (sign)
-         * bit was changed by the operation; if the sign bit retains its
-         * original value, OF is cleared.
-         */
-        /*
-         * SHL/SAL destination, count
-         *
-         * SHL and SAL (Shift Logical Left and Shift Arithmetic Left) perform
-         * the same operation and are physically the same instruction. The
-         * destination byte or word is shifted left by the number of bits
-         * specified in the count operand. Zeros are shifted in on the right.
-         * If the sign bit retains its original value, then OF is cleared.
-         */
-
-        /*
-         * SHR destination, source
-         *
-         * SHR (Shift Logical Right) shifts the bits in the destination operand
-         * (byte or word) to the right by the number of bits specified in the
-         * count operand. Zeros are shifted in on the left. If the sign bit
-         * retains its original value, then OF is cleared.
-         */
-
-        /*
-         * 
-         * SAR destination, count
-         *
-         * SAR (Shift Arithmetic Right) shifts the bits in the destination
-         * operand (byte or word) to the right by the number of bits specified
-         * in the count operand. Bits equal to the original high-order (sign)
-         * bit are shifted in on the left, preserving the sign of the original
-         * value. Note that SAR does not produce the same result as the
-         * dividend of an "equivalent" IDIV instruction if the destination
-         * operand is negative and l-bits are shifted out. For example,
-         * shifting -5 right by one bit yields -3, while integer division of -5
-         * by 2 yields -2. The difference in the instructions is that IDIV
-         * truncates all numbers toward zero, while SAR truncates positive
-         * numbers toward zero and negative numbers toward negative infinity.
-         */
-
-        /*
-         * Rotates
-         *
-         * Bits in bytes and words also may be rotated. Bits rotated out of an
-         * operand are not lost as in a shift, but are "circled" back into the
-         * other "end" of the operand. As in the shift instructions, the number
-         * of bits to be rotated is taken from the count operand, which may
-         * specify either a constant of l, or the CL register. The carry flag
-         * may act as an extension of the operand in two of the rotate
-         * instructions, allowing a bit to be isolated in CF and then tested by
-         * a JC (jump if carry) or JNC (jump if not carry) instruction.
-         *
-         * Rotates affect only the carry and overflow flags. CF always contains
-         * the value of the last bit rotated out. On multibit rotates, the
-         * value of OF is always undefined. In single-bit rotates, OF is set if
-         * the operation changes the high-order (sign) bit of the destination
-         * operand. If the sign bit retains its original value, OF is cleared.
-         */
-        /*
-         * ROL destination,count
-         *
-         * ROL (Rotate Left) rotates the destination byte or word left by the
-         * number of bits specified in the count operand.
-         */
-
-        /*
-         * ROR destination,count
-         *
-         * ROR (Rotate Right) operates similar to ROL except that the bits in
-         * the destination byte or word are rotated right instead of left.
-         */
-
-        /*
-         * RCL destination,count
-         *
-         * RCL (Rotate through Carry Left) rotates the bits in the byte or word
-         * destination operand to the left by the number of bits specified in
-         * the count operand. The carry flag (CF) is treated as "part of" the
-         * destination operand; that is, its value is rotated into the
-         * low-order bit of the destination, and itself is replaced by the
-         * high-order bit of the destination.
-         */
-
-        /*
-         * RCR destination,count
-         *
-         * RCR (Rotate through Carry Right) operates exactly like RCL except
-         * that the bits are rotated right instead of left.
-         */
-
-        /*
-         * Program Transfer Instructions
-         *
-         * The sequence of execution of instructions in an 8086 program is
-         * determined by the content of the code segment register (CS) and the
-         * instruction pointer (IP). The CS register contains the base address
-         * of the current code segment, the 64k portion of memory from which
-         * instructions are presently being fetched. The IP is used as an
-         * offset from the beginning of the code segment; the combination of CS
-         * and IP points to the memory location from which the next instruction
-         * is to be fetched. (Recall that under most operating conditions, the
-         * next instruction to be executed has already been fetched from memory
-         * and is waiting in the CPU instruction queue.) The program transfer
-         * instructions operate on the instruction pointer and on the CS
-         * register; changing the content of these causes normal sequential
-         * execution to be altered. When a program transfer occurs, the queue
-         * no longer contains the correct instruction, and the BIU obtains the
-         * next instruction from memory using the new IP and CS values, passes
-         * the instruction directly to the EU, and then begins refilling the
-         * queue from the new location.
-         *
-         * Four groups of program transfers are available in the 8086:
-         * unconditional transfers, conditional transfers, iteration control
-         * instructions and interrupt-related instructions. Only the interrupt-
-         * related instruction affect any CPU flags. As will be seen, however,
-         * the execution of many of the program transfer instructions is
-         * affected by the states of the flags.
-         */
-        /*
-         * Unconditional Transfers
-         *
-         * The unconditional transfers instructions may transfer control to a
-         * target instruction within the current code segment (intrasegment
-         * transfer) or to a different code segment (intersegment transfer).
-         * (The ASM-86 assembler terms an intrasegment target NEAR and an
-         * intersegment target FAR.) The transfer is made unconditionally any
-         * time the instruction is executed.
-         */
-        /*
-         * CALL procedure-name
-         *
-         * CALL activated an out-of-line procedure, saving information on the
-         * stack to permit a RET (return) instruction in the procedure to
-         * transfer control back to the instruction following the CALL. The
-         * assembler generates a different type of CALL instruction depending
-         * on whether the programmer has defined the procedure name as NEAR or
-         * FAR. For control to return properly, the type of CALL instruction
-         * must match the type of RET instruction that exists from the
-         * procedure. (The potential for a mismatch exists if the procedure and
-         * the CALL are contained in separately assembled programs.) Different
-         * forms of the CALL instruction allow the address of the target
-         * procedure to be obtained from the instruction itself (direct CALL)
-         * or from a memory location or register referenced by the instruction
-         * (indirect CALL). In the following descriptions, bear in mind that
-         * the processor automatically adjusts IP to point to the next
-         * instruction to be executed before saving it on the stack.
-         *
-         * For an intrasegment direct CALL, SP (the stack pointer) is
-         * decremented by two and IP is pushed onto the stack. The relative
-         * displacement (up to ±32k) of the target procedure from the CALL
-         * instruction is then added to the instruction pointer. This form of
-         * the CALL instruction is "self-relative" and is appropriate for
-         * position independent (dynamically relocatable) routines in which the
-         * CALL and its target are in the same segment and are moved together.
-         *
-         * An intrasegment indirect CALL may be made through memory or through
-         * a register. SP is decremented by two and IP is pushed onto the
-         * stack. The offset of the target procedure is obtained from the
-         * memory word or 16-bit general register referenced in the instruction
-         * and replaces IP.
-         *
-         * For an intersegment direct CALL, SP is decremented by two, and CS is
-         * pushed onto the stack. CS is replaced by the segment word contained
-         * in the instruction. SP again is decremented by two. IP is pushed
-         * onto the stack and is replaced by the offset word contained in the
-         * instruction.
-         *
-         * For an intersegment indirect CALL (which only may be made through
-         * memory), SP is decremented by two, and CS is pushed onto the stack.
-         * CS is then replaced by the content of the second word of the
-         * doubleword memory pointer referenced by the instruction. SP again is
-         * decremented by two, and IP is pushed onto the stack and is replaced
-         * by the content of the first word of the doubleword pointer
-         * referenced by the instruction.
-         */
-        // Direct with Segment
-        case 0xe8: // CALL NEAR-PROC
-            dst = getMem(ip++);
-            dst |= getMem(ip++) << 8;
-            dst = signext(0b1, dst);
-            push(ip);
-            ip += dst;
-            break;
-
-        // Direct Intersegment
-        case 0x9a: // CALL FAR-PROC
-            dst = getMem(ip++);
-            dst |= getMem(ip++) << 8;
-            src = getMem(ip++);
-            src |= getMem(ip++) << 8;
-            push(cs);
-            push(ip);
-            ip = dst;
-            cs = src;
-            break;
-
-        /*
-         * RET optional-pop-value
-         *
-         * RET (Return) transfers control from a procedure back to the
-         * instruction following the CALL that activated the procedure. The
-         * assembler generates an intrasegment RET if the programmer has
-         * defined the procedure NEAR, or an intersegment RET if the procedure
-         * has been defined as FAR. RET pops the word at the top of the stack
-         * (pointed to by the register SP) into the instruction pointer and
-         * increments SP by two. If RET is intersegment, the word at the top of
-         * the stack is popped into the CS register, and SP is again
-         * incremented by two. If an optional pop value has been specified, RET
-         * adds that value to SP. This feature may be used to discard
-         * parameters pushed onto the stack before the execution of the CALL
-         * instruction.
-         */
-        // Within Segment
-        case 0xc3: // RET (intrasegment)
-            ip = pop();
-            break;
-
-        // Within Seg Adding Immed to SP
-        case 0xc2: // RET IMMED16 (intraseg)
-            src = getMem(ip++);
-            src |= getMem(ip++) << 8;
-            ip = pop();
-            sp += src;
-            break;
-
-        // Intersegment
-        case 0xcb: // RET (intersegment)
-            ip = pop();
-            cs = pop();
-            break;
-
-        // Intersegment Adding Immediate to SP
-        case 0xca: // RET IMMED16 (intersegment)
-            src = getMem(ip++);
-            src |= getMem(ip++) << 8;
-            ip = pop();
-            cs = pop();
-            sp += src;
-            break;
-
-        /*
-         * JMP target
-         *
-         * JMP unconditionally transfers control to the target location. Unlike
-         * a CALL instruction, JMP does not save any information on the stack,
-         * and no return to the instruction following the JMP is expected. Like
-         * CALL, the address of the target operand may be obtained from the
-         * instruction itself (direct JMP) or from memory or a register
-         * referenced by the instruction (indirect JMP).
-         *
-         * An intrasegment direct JMP changes the instruction pointer by adding
-         * the relative displacement of the target from the JMP instruction. If
-         * the assembler can determine that the target is within 127 bytes of
-         * the JMP, it automatically generates a two-byte form of this
-         * instruction called a SHORT JMP; otherwise, it generates a NEAR JMP
-         * that can address a target within ±32k. Intrasegment direct JMPS are
-         * self-relative and are appropriate in position-independent
-         * (dynamically relocatable) routines in which the JMP and its target
-         * are in the same segment and are moved together.
-         *
-         * An intrasegment indirect JMP may be made either through memory or
-         * through a 16-bit general register. In the first case, the content of
-         * the word referenced by the instruction replaces the instruction
-         * pointer. In the second case, the new IP value is taken from the
-         * register named in the instruction.
-         *
-         * An intersegment direct JMP replaces IP and CS with values contained
-         * in the instruction.
-         *
-         * An intersegment indirect JMP may be made only through memory. The
-         * first word of the doubleword pointer referenced by the instruction
-         * replaces IP, and the second word replaces CS.
-         */
-        // Direct within Segment
-        case 0xe9: // JMP NEAR-LABEL
-            dst = getMem(ip++);
-            dst |= getMem(ip++) << 8;
-            dst = signext(0b1, dst);
-            ip += dst;
-            break;
-
-        // Direct within Segment-Short
-        case 0xeb: // JMP SHORT-LABEL
-            dst = getMem(ip++);
-            dst = signext(0b0, dst);
-            ip += dst;
-            break;
-
-        // Direct Intersegment
-        case 0xea: // JMP FAR-LABEL
-            dst = getMem(ip++);
-            dst |= getMem(ip++) << 8;
-            src = getMem(ip++);
-            src |= getMem(ip++) << 8;
-            ip = dst;
-            cs = src;
-            break;
-
-        /*
-         * Conditional Transfers
-         *
-         * The conditional transfer instructions are jumps that may or may not
-         * transfer control depending on the state of the CPU flags at the time
-         * the instruction is executed. The 18 instructions each test a
-         * different combination of flags for a conditional. If the condition
-         * is "true," then control is transferred to the target specified in
-         * the instruction. If the condition is "false," then control passes to
-         * the instruction that follows the conditional jump. All conditional
-         * jumps are SHORT, that is, the target must be in the current code
-         * segment and within -128 to +127 bytes of the first byte of the next
-         * instruction (JMP 00H jumps to the first byte of the next
-         * instruction). Since the jump is made by adding the relative
-         * displacement of the target to the instruction pointer, all
-         * conditional jumps are self-relative and are appropriate for
-         * position-independent routines.
-         */
-        /*
-         * JE/JZ
-         *
-         * Jump if equal/zero - ZF=1.
-         */
-        case 0x74: // JE/JZ SHORT-LABEL
-            dst = getMem(ip++);
-            dst = signext(0b0, dst);
-            if (getFlag(ZF))
-                ip += dst;
-            break;
-
-        /*
-         * JB/JNAE/JC
-         *
-         * Jump if below/not above or equal/carry - CF=1.
-         */
-        case 0x72: // JB/JNAE/JC SHORT-LABEL
-            dst = getMem(ip++);
-            dst = signext(0b0, dst);
-            if (getFlag(CF))
-                ip += dst;
-            break;
-
-        /*
-         * JBE/JNA
-         *
-         * Jump if below or equal/not above - (CF or ZF)=1.
-         */
-        case 0x76: // JBE/JNA SHORT-LABEL
-            dst = getMem(ip++);
-            dst = signext(0b0, dst);
-            if (getFlag(CF) || getFlag(ZF))
-                ip += dst;
-            break;
-
-        /*
-         * JS
-         *
-         * Jump if sign - SF=1.
-         */
-        case 0x78: // JS SHORT-LABEL
-            dst = getMem(ip++);
-            dst = signext(0b0, dst);
-            if (getFlag(SF))
-                ip += dst;
-            break;
-
-        /*
-         * JNE/JNZ
-         *
-         * Jump if not equal/not zero - ZF=0.
-         */
-        case 0x75: // JNE/JNZ SHORT-LABEL
-            dst = getMem(ip++);
-            dst = signext(0b0, dst);
-            if (!getFlag(ZF))
-                ip += dst;
-            break;
-
-        /*
-         * JNB/JAE
-         *
-         * Jump if not below/above or equal - CF=0.
-         */
-        case 0x73: // JNE/JNZ SHORT-LABEL
-            dst = getMem(ip++);
-            dst = signext(0b0, dst);
-            if (!getFlag(CF))
-                ip += dst;
-            break;
-
-        /*
-         * JNBE/JA
-         *
-         * Jump if not below nor equal/above - (CF or ZF)=0.
-         */
-        case 0x77: // JNBE/JA SHORT-LABEL
-            dst = getMem(ip++);
-            dst = signext(0b0, dst);
-            if (!getFlag(CF) && !getFlag(ZF))
-                ip += dst;
-            break;
-
-        /*
-         * JNS
-         *
-         * Jump if not sign - SF=0.
-         */
-        case 0x79: // JNS SHORT-LABEL
-            dst = getMem(ip++);
-            dst = signext(0b0, dst);
-            if (!getFlag(SF))
-                ip += dst;
-            break;
-
-        /*
-         * Processor Control Instructions
-         *
-         * These instructions allow programs to control various CPU functions.
-         * One group of instructions updates flags, and another group is used
-         * primarily for synchronizing the 8086 with external events. A final
-         * instruction causes the CPU to do nothing. Except for the flag
-         * operations, none of the processor control instructions affect the
-         * flags.
-         */
-        /*
-         * Flag Operations
-         */
-        /*
-         * CLC
-         *
-         * CLC (Clear Carry flag) zeroes the carry flag (CF) and affects no
-         * other flags. It (and CMC and STC) is useful in conjunction with the
-         * RCL and RCR instructions.
-         */
-        case 0xf8:
-            setFlag(CF, false);
-            break;
-
-        /*
-         * STC
-         *
-         * STC (Set Carry flag) sets CF to 1 and affects no other flags.
-         */
-        case 0xf9:
-            setFlag(CF, true);
-            break;
-
-        /*
-         * External Synchronization
-         */
-        /*
-         * HLT
-         *
-         * HLT (Halt) causes the 8086 to enter the halt state. The processor
-         * leaves the halt state upon activation of the RESET line, upon
-         * receipt of a non-maskable interrupt request on NMI, or, if
-         * interrupts are enabled, upon receipt of a maskable interrupt request
-         * on INTR. HLT does not affect any flags. It may be used as an
-         * alternative to an endless software loop in situations where a
-         * program must wait for an interrupt.
-         */
-        case 0xf4: // HLT
-            return false;
-
-        /*
-         * No Operation
-         */
-        /*
-         * NOP
-         *
-         * NOP (No Operation) causes the CPU to do nothing. NOP does not affect
-         * any flags.
-         */
-        case 0x90: // NOP
-            break;
-
-        /*
-         * Extensions
-         */
-        /*
-         * GROUP 1
-         */
-        case 0x80:
-            // ADD REG8/MEM8,IMMED8
-            // OR REG8/MEM8,IMMED8
-            // ADC REG8/MEM8,IMMED8
-            // SBB REG8/MEM8,IMMED8
-            // AND REG8/MEM8,IMMED8
-            // SUB REG8/MEM8,IMMED8
-            // XOR REG8/MEM8,IMMED8
-            // CMP REG8/MEM8,IMMED8
-        case 0x81:
-            // ADD REG16/MEM16,IMMED16
-            // OR REG16/MEM16,IMMED16
-            // ADC REG16/MEM16,IMMED16
-            // SBB REG16/MEM16,IMMED16
-            // AND REG16/MEM16,IMMED16
-            // SUB REG16/MEM16,IMMED16
-            // XOR REG16/MEM16,IMMED16
-            // CMP REG16/MEM16,IMMED16
-        case 0x82:
-            // ADD REG8/MEM8,IMMED8
-            // ADC REG8/MEM8,IMMED8
-            // SBB REG8/MEM8,IMMED8
-            // SUB REG8/MEM8,IMMED8
-            // CMP REG8/MEM8,IMMED8
-        case 0x83:
-            // ADD REG16/MEM16,IMMED8
-            // ADC REG16/MEM16,IMMED8
-            // SBB REG16/MEM16,IMMED8
-            // SUB REG16/MEM16,IMMED8
-            // CMP REG16/MEM16,IMMED8
-            decode();
-            dst = getRM(w, mod, rm);
-            src = getMem(ip++);
-            if (queue[0] == 0x81)
-                src |= getMem(ip++) << 8;
-            // Perform sign extension if needed.
-            else if (queue[0] == 0x83 && (src & 0x80) == 0x80)
-                src |= 0xff00;
-            switch (reg) {
-            case 0b000: // ADD
+                setReg(w, reg, src);
+                break;
+
+            // Memory to Accumulator
+            case 0xa0: // MOV AL,MEM8
+            case 0xa1: // MOV AX,MEM16
+                dst = getMem(ip++);
+                dst |= getMem(ip++) << 8;
+                src = getMem(os, dst);
+                if (w == 0b1)
+                    src |= getMem(os, dst + 1) << 8;
+                setReg(w, 0b000, src);
+                break;
+
+            // Accumulator to Memory
+            case 0xa2: // MOV MEM8,AL
+            case 0xa3: // MOV MEM16,AX
+                dst = getMem(ip++);
+                dst |= getMem(ip++) << 8;
+                src = getReg(w, 0b000);
+                setMem(os, dst, src & 0xff);
+                if (w == 0b1)
+                    setMem(os, dst + 1, src >>> 8 & 0xff);
+                break;
+
+            // Register/Memory to Segment Register
+            case 0x8e: // MOV SEGREG,REG16/MEM16
+                decode();
+                src = getRM(0b1, mod, rm);
+                setSegReg(reg, src);
+                break;
+
+            // Segment Register to Register/Memory
+            case 0x8c: // MOV REG16/MEM16,SEGREG
+                decode();
+                src = getSegReg(reg);
+                setRM(0b1, mod, rm, src);
+                break;
+
+            /*
+             * PUSH source
+             *
+             * PUSH decrements SP (the stack pointer) by two and then transfers
+             * a word from the source operand to the top of the stack now
+             * pointer by SP. PUSH often is used to place parameters on the
+             * stack before calling a procedure; more generally, it is the basic
+             * means of storing temporary data on the stack.
+             */
+            // Register
+            case 0x50: // PUSH AX
+            case 0x51: // PUSH CX
+            case 0x52: // PUSH DX
+            case 0x53: // PUSH BX
+            case 0x54: // PUSH SP
+            case 0x55: // PUSH BP
+            case 0x56: // PUSH SI
+            case 0x57: // PUSH DI
+                reg = queue[0] & 0b111;
+                src = getReg(0b1, reg);
+                push(src);
+                break;
+
+            // Segment Register
+            case 0x06: // PUSH ES
+            case 0x0e: // PUSH CS
+            case 0x16: // PUSH SS
+            case 0x1e: // PUSH DS
+                reg = queue[0] >>> 3 & 0b111;
+                src = getSegReg(reg);
+                push(src);
+                break;
+
+            /*
+             * POP destination
+             *
+             * POP transfers the word at the current top of the stack (pointed
+             * to by the SP) to the destination operand, and then increments SP
+             * by two to point to the new top of the stack. POP can be used to
+             * move temporary variables from the stack to registers or memory.
+             */
+            // Register
+            case 0x58: // POP AX
+            case 0x59: // POP CX
+            case 0x5a: // POP DX
+            case 0x5b: // POP BX
+            case 0x5c: // POP SP
+            case 0x5d: // POP BP
+            case 0x5e: // POP SI
+            case 0x5f: // POP DI
+                reg = queue[0] & 0b111;
+                src = pop();
+                setReg(0b1, reg, src);
+                break;
+
+            // Segment Register
+            case 0x07: // POP ES
+            case 0x0f: // POP CS
+            case 0x17: // POP SS
+            case 0x1f: // POP DS
+                reg = queue[0] >>> 3 & 0b111;
+                src = pop();
+                setSegReg(reg, src);
+                break;
+
+            /*
+             * XCHG destination,source
+             *
+             * XCHG (exchange) switches the contents of the source and
+             * destination (byte or word) operands. When used in conjunction
+             * with the LOCK prefix, XCHG can test and set a semaphore that
+             * controls access to a resource shared by multiple processors.
+             */
+            // Register/Memory with Register
+            case 0x86: // XCHG REG8,REG8/MEM8
+            case 0x87: // XCHG REG16,REG16/MEM16
+                decode();
+                dst = getReg(w, reg);
+                src = getRM(w, mod, rm);
+                setReg(w, reg, src);
+                setRM(w, mod, rm, dst);
+                break;
+
+            // Register with Accumulator
+            case 0x91: // XCHG AX,CX
+            case 0x92: // XCHG AX,DX
+            case 0x93: // XCHG AX,BX
+            case 0x94: // XCHG AX,SP
+            case 0x95: // XCHG AX,BP
+            case 0x96: // XCHG AX,SI
+            case 0x97: // XCHG AX,DI
+                reg = queue[0] & 0b111;
+                dst = getReg(0b1, 0b000);
+                src = getReg(0b1, reg);
+                setReg(0b1, 0b000, src);
+                setReg(0b1, reg, dst);
+                break;
+
+            /*
+             * XLAT translate-table
+             *
+             * XLAT (translate) replaces a byte in the AL register with a byte
+             * from a 256-byte, user-coded translation table. Register BX is
+             * assumed to point to the beginning of the table. The byte in AL is
+             * used as an index into the table and is replaced by the byte at
+             * the offset in the table corresponding to AL's binary value. The
+             * first byte in the table has an offset of 0. For example, if AL
+             * contains 5H, and the sixth element of the translation table
+             * contains 33H, then AL will contain 33H following the instruction.
+             * XLAT is useful for translating characters from one code to
+             * another, the classic example being ASCII to EBCDIC or the
+             * reverse.
+             */
+            case 0xd7: // XLAT SOURCE-TABLE
+                al = getMem(os, (bh << 8 | bl) + al);
+                break;
+
+            /*
+             * Address Object Transfers
+             *
+             * The instructions manipulate the addresses of the variables rather
+             * than the contents or values of variables. They are most useful
+             * for list processing, based variables, and string operations.
+             */
+            /*
+             * LEA destination,source
+             *
+             * LEA (load effective address) transfers the offset of the source
+             * operand (rather than its value) to the destination operand. The
+             * source must be a memory operand, and the destination operand must
+             * be a 16-bit general register. LEA does not affect any flags. The
+             * XLAT and string instructions assume that certain registers point
+             * to operands; LEA can be used to load these register (e.g.,
+             * loading BX with the address of the translate table used by the
+             * XLAT instruction).
+             */
+            case 0x8d: // LEA REG16,MEM16
+                decode();
+                src = getEA(mod, rm) - (os << 4);
+                setReg(w, reg, src);
+                break;
+
+            /*
+             * LDS destination,source
+             *
+             * LDS (load pointer using DS) transfers a 32-bit pointer variable
+             * from the source operand, which must be a memory operand, to the
+             * destination operand and register DS. The offset word of the
+             * pointer is transferred to the destination operand, which may be
+             * any 16-bit general register. The segment word of the pointer is
+             * transferred to register DS. Specifying SI as the destination
+             * operand is a convenient way to prepare to process a source string
+             * that is not in the current data segment (string instructions
+             * assume that the source string is located in the current data
+             * segment and that SI contains the offset of the string).
+             */
+            case 0xc5: // LDS REG16,MEM16
+                decode();
+                src = getEA(mod, rm);
+                setReg(w, reg, memory[src + 1] << 8 | memory[src]);
+                ds = memory[src + 3] << 8 | memory[src + 2];
+                break;
+
+            /*
+             * LES destination,source
+             *
+             * LES (load pointer using ES) transfers a 32-bit pointer variable
+             * from the source operand, which must be a memory operand, to the
+             * destination operand and register ES. The offset word of the
+             * pointer is transferred to the destination operand, which may be
+             * any 16-bit general register. The segment word of the pointer is
+             * transferred to register ES. Specifying DI as the destination
+             * operand is a convenient way to prepare to process a destination
+             * string that is not in the current extra segment. (The destination
+             * string must be located in the extra segment, and DI must contain
+             * the offset of the string).
+             */
+            case 0xc4: // LES REG16,MEM16
+                decode();
+                src = getEA(mod, rm);
+                setReg(w, reg, memory[src + 1] << 8 | memory[src]);
+                es = memory[src + 3] << 8 | memory[src + 2];
+                break;
+
+            /*
+             * Flag Transfers
+             */
+            /*
+             * LAHF
+             *
+             * LAHF (load register AH from flags) copies SF, ZF, AF, PF and CF
+             * into the bits 7, 6, 4, 2 and 0, respectively, of register AH. The
+             * content of bits 5, 3 and 1 is undefined; the flags themselves are
+             * not affected. LAHF is provided primarily for converting 8080/8085
+             * assembly language programs to run on an 8086.
+             */
+            case 0x9f: // LAHF
+                ah = flags & 0xff;
+                break;
+
+            /*
+             * SAHF
+             *
+             * SAHF (store register AH into flags) transfers bits 7, 6, 4, 2 and
+             * 0 from register AH into SF, ZF, AF, PF and CF, respectively,
+             * replacing whatever values these flags previously had. OF, DF, IF
+             * and TF are not affected. This instruction is provided from
+             * 8080/8085 compatibility.
+             */
+            case 0x9e: // SAHF
+                flags = flags & 0xff00 | ah;
+                break;
+
+            /*
+             * PUSHF
+             *
+             * PUSH decrements SP (the stack pointer) by two and then transfers
+             * all flags to the word at the top of stack pointed to by SP. The
+             * flags themselves are not affected.
+             */
+            case 0x9c: // PUSHF
+                push(flags);
+                break;
+
+            /*
+             * POPF
+             *
+             * POPF transfers specific bits from the word at the current top of
+             * stack (pointed to by register SP) into the 8086 flags, replacing
+             * whatever values the flags previously contained. SP is then
+             * incremented by two to point at the new top of stack. PUSHF and
+             * POPF allow a procedure to save and restore a calling program's
+             * flags. They also allow a program to change the setting of TF
+             * (there is no instruction for updating this flag directly). The
+             * change is accomplished by pushing the flags, altering bit 8 of
+             * the memory- image and then popping the flags.
+             */
+            case 0x9d: // POPF
+                flags = pop();
+                break;
+
+            /*
+             * Arithmetic Instructions
+             *
+             * Arithmetic Data Formats
+             *
+             * 8086 arithmetic operations may be performed on four types of
+             * numbers: unsigned binary, signed binary (integers), unsigned
+             * packed decimal and unsigned unpacked decimal. Binary numbers may
+             * be 8 or 16 bits long. Decimal numbers are stored in bytes, two
+             * digits per byte for packed decimals and one digit per byte for
+             * unpacked decimal. The processor always assumes that the operands
+             * specified in arithmetic instructions contain data that represents
+             * valid numbers for the type of instructions being performed.
+             * Invalid data may produce unpredictable results.
+             *
+             * Unsigned binary numbers may be either 8 or 16 bits long; all bits
+             * are considered in determining a number's magnitude. The value
+             * range of an 8-bit unsigned binary number is 0-255; 16 bits can
+             * represent values from 0 through 65,535. Addition, subtraction,
+             * multiplication and division operations are available for unsigned
+             * binary numbers.
+             *
+             * Signed binary numbers (integer) may be either 8 or 16 bits long.
+             * The high-order (leftmost) bit is interpreted as the number's
+             * sign: 0 = positive and 1 = negative. Negative numbers are
+             * represented in standard two's complement notation. Since the
+             * high-order is used for a sign, the range of an 8-bit integer is
+             * -128 through +127; 16-bit integer may range from -32,768 through
+             * +32,767. The value zero has a positive sign. Multiplication and
+             * division operations are provided for signed binary numbers.
+             * Addition and subtraction are performed with the unsigned binary
+             * instructions. Conditional jump instructions, as well as an
+             * "interrupt on overflow" instruction, can be used following an
+             * unsigned operation on an integer to detect overflow into the sign
+             * bit.
+             *
+             * Packed decimal numbers are stored as unsigned byte quantities.
+             * The byte is treated as having one decimal digit in each half-byte
+             * (nibble); the digit in the high-order half-byte is the most
+             * significant. Hexadecimal values 0-9 are valid in each half-byte,
+             * and the range of a packed decimal number is 0-99. Addition and
+             * subtraction are performed in two steps. First an unsigned binary
+             * instruction is used to produce an intermediate result in register
+             * AL. The an adjustment operation is performed which changes the
+             * intermediate value in AL to a final correct packed decimal
+             * result. Multiplication and division adjustments are not available
+             * for packed decimal numbers.
+             *
+             * Unpacked decimal numbers are stored as unsigned byte quantities.
+             * The magnitude of the number is determined from the low-order
+             * half-byte; hexadecimal values 0-9 are valid and are interpreted
+             * as decimal numbers. The high-order half-byte must be zero for
+             * multiplication and division; it may contain any value from
+             * addition and subtraction. Arithmetic on unpacked decimal numbers
+             * is performed in two steps. The unsigned binary addition,
+             * subtraction and multiplication operations are used to produce an
+             * intermediate result in register AL. An adjustment instruction
+             * then changes the value in AL to a final correct unpacked decimal
+             * number. Division is performed similarly, except that the
+             * adjustment is carried out on the numerator operand in register AL
+             * first, then a following unsigned binary division instruction
+             * produces a correct result.
+             *
+             * Unpacked decimal numbers are similar to the ASCII character
+             * representations of the digits 0-9. Note, however, that the high-
+             * order half-byte of an ASCII numeral is always 3H. Unpacked
+             * decimal arithmetic may be performed on ASCII number characters
+             * under the following conditions: - the high-order half-byte of an
+             * ASCII numeral must be set to 0H prior to multiplication or
+             * division. - unpacked decimal arithmetic leaves the high-order
+             * half-byte set to 0H; it must be set to 3H to produce a valid
+             * ASCII numeral.
+             *
+             * Arithmetic Instructions and Flags
+             *
+             * The 8086 arithmetic instructions post certain characteristics of
+             * the result of the operation to six flags. Most of these flags can
+             * be tested by following the arithmetic instruction with a
+             * conditional jump instruction; the INTO (interrupt on overflow)
+             * instruction may also be used. The various instructions affect the
+             * flags differently, as explained in the instruction descriptions.
+             */
+            /*
+             * Addition
+             */
+            /*
+             * ADD destination,source
+             *
+             * The sum of the two operands, which may be bytes or words,
+             * replaces the destination operand. Both operands may be signed or
+             * unsigned binary numbers. ADD updates AF, CF, OF, PF, SF and ZF.
+             */
+            // Reg./Memory and Register to Either
+            case 0x00: // ADD REG8/MEM8,REG8
+            case 0x01: // ADD REG16/MEM16,REG16
+                decode();
+                dst = getRM(w, mod, rm);
+                src = getReg(w, reg);
                 res = add(w, dst, src);
                 setRM(w, mod, rm, res);
                 break;
-            case 0b001: // OR
-                if (queue[0] == 0x80 || queue[0] == 0x81) {
-                    res = dst | src;
-                    logic(w, res);
+            case 0x02: // ADD REG8,REG8/MEM8
+            case 0x03: // ADD REG16,REG16/MEM16
+                decode();
+                dst = getReg(w, reg);
+                src = getRM(w, mod, rm);
+                res = add(w, dst, src);
+                setReg(w, reg, res);
+                break;
+
+            // Immediate to Accumulator
+            case 0x04: // ADD AL,IMMED8
+            case 0x05: // ADD AX,IMMED16
+                dst = getReg(w, 0);
+                src = getMem(ip++);
+                if (w == 0b1)
+                    src |= getMem(ip++) << 8;
+                res = add(w, dst, src);
+                setReg(w, 0b000, res);
+                break;
+
+            /*
+             * ADC destination,source
+             *
+             * ADC (Add with Carry) sums the operands, which may be bytes or
+             * words, adds one if CF is set and replaces the destination operand
+             * with the result. Both operands may be signed or unsigned binary
+             * numbers. ADC updates AF, CF, OF, PF, SF and ZF. Since ADC
+             * incorporates a carry from a previous operation, it can be used to
+             * write routines to add numbers longer than 16 bits.
+             */
+            // Reg./Memory with Register to Either
+            case 0x10: // ADC REG8/MEM8,REG8
+            case 0x11: // ADC REG16/MEM16,REG16
+                decode();
+                dst = getRM(w, mod, rm);
+                src = getReg(w, reg);
+                res = adc(w, dst, src);
+                setRM(w, mod, rm, res);
+                break;
+            case 0x12: // ADC REG8,REG8/MEM8
+            case 0x13: // ADC REG16,REG16/MEM16
+                decode();
+                dst = getReg(w, reg);
+                src = getRM(w, mod, rm);
+                res = adc(w, dst, src);
+                setReg(w, reg, res);
+                break;
+
+            // Immediate to Accumulator
+            case 0x14: // ADC AL,IMMED8
+            case 0X15: // ADC AX,IMMED16
+                dst = getReg(w, 0b000);
+                src = getMem(ip++);
+                if (w == 0b1)
+                    src |= getMem(ip++) << 8;
+                res = adc(w, dst, src);
+                setReg(w, 0b000, res);
+                break;
+
+            /*
+             * INC destination
+             *
+             * INC (Increment) adds one to the destination operand. The operand
+             * may be a byte or a word and is treated as an unsigned binary
+             * number. INC updates AF, OF, PF, SF and ZF; it does not affect CF.
+             */
+            // Register
+            case 0x40: // INC AX
+            case 0x41: // INC CX
+            case 0x42: // INC DX
+            case 0x43: // INC BX
+            case 0x44: // INC SP
+            case 0x45: // INC BP
+            case 0x46: // INC SI
+            case 0x47: // INC DI
+                reg = queue[0] & 0b111;
+                src = getReg(0b1, reg);
+                res = inc(0b1, src);
+                setReg(0b1, reg, res);
+                break;
+
+            /*
+             * AAA
+             *
+             * AAA (ASCII Adjust for Addition) changes the contents of register
+             * AL to a valid unpacked decimal number; the high-order half-byte
+             * is zeroed. AAA updates AF and CF; the content of OF, PF, SF and
+             * ZF is undefined following execution of AAA.
+             */
+            case 0x37: // AAA
+                if ((al & 0xf) > 9 || getFlag(AF)) {
+                    al += 6;
+                    ah = ah + 1 & 0xff;
+                    setFlag(CF, true);
+                    setFlag(AF, true);
+                } else {
+                    setFlag(CF, false);
+                    setFlag(AF, false);
+                }
+                al &= 0xf;
+                break;
+
+            /*
+             * DAA
+             *
+             * DAA (Decimal Adjust for Addition) corrects the result of
+             * previously adding two valid packed decimal operands (the
+             * destination operand must have been register AL). DAA changes the
+             * content of AL to a pair of valid packed decimal digits. It
+             * updates AF, CF, PF, SF and ZF; the content of OF is undefined
+             * following execution of DAA.
+             */
+            case 0x27: { // DAA
+                final int oldAL = al;
+                final boolean oldCF = getFlag(CF);
+                setFlag(CF, false);
+                if ((al & 0xf) > 9 || getFlag(AF)) {
+                    al += 6;
+                    setFlag(CF, oldCF || al < 0);
+                    al &= 0xff;
+                    setFlag(AF, true);
+                } else
+                    setFlag(AF, false);
+                if (oldAL > 0x99 || oldCF) {
+                    al = al + 0x60 & 0xff;
+                    setFlag(CF, true);
+                } else
+                    setFlag(CF, false);
+                setFlags(0b0, al);
+                break;
+            }
+
+            /*
+             * Subtraction
+             */
+            /*
+             * SUB destination,source
+             *
+             * The source operand is subtracted from the destination operand,
+             * and the result replaces the destination operand. The operands may
+             * be bytes or words. Both operands may be signed or unsigned binary
+             * numbers. SUB updates AF, CF, OF, PF, SF and ZF.
+             */
+            // Reg./Memory and Register to Either
+            case 0x28: // SUB REG8/MEM8,REG8
+            case 0x29: // SUB REG16/MEM16,REG16
+                decode();
+                dst = getRM(w, mod, rm);
+                src = getReg(w, reg);
+                res = sub(w, dst, src);
+                setRM(w, mod, rm, res);
+                break;
+            case 0x2a: // SUB REG8,REG8/MEM8
+            case 0x2b: // SUB REG16,REG16/MEM16
+                decode();
+                dst = getReg(w, reg);
+                src = getRM(w, mod, rm);
+                res = sub(w, dst, src);
+                setReg(w, reg, res);
+                break;
+
+            // Immediate from Accumulator
+            case 0x2c: // SUB AL,IMMED8
+            case 0x2d: // SUB AX,IMMED16
+                dst = getReg(w, 0b000);
+                src = getMem(ip++);
+                if (w == 0b1)
+                    src |= getMem(ip++) << 8;
+                res = sub(w, dst, src);
+                setReg(w, 0b000, res);
+                break;
+
+            /*
+             * SBB destination,source
+             *
+             * SBB (Subtract with Borrow) subtracts the source from the
+             * destination, subtracts one if CF is set, and returns the result
+             * to the destination operand. Both operands may be bytes or words.
+             * Both operands may be signed or unsigned binary numbers. SBB
+             * updates AF, CF, OF, PF, SF and ZF. Since it incorporates a borrow
+             * from a previous operation, SBB may be used to write routines that
+             * subtract numbers longer than 16 bits.
+             */
+            // Reg./Memory with Register to Either
+            case 0x18: // SBB REG8/MEM8,REG8
+            case 0x19: // SBB REG16/MEM16,REG16
+                decode();
+                dst = getRM(w, mod, rm);
+                src = getReg(w, reg);
+                res = sbb(w, dst, src);
+                setRM(w, mod, rm, res);
+                break;
+            case 0x1a: // SBB REG8,REG8/MEM8
+            case 0x1b: // SBB REG16,REG16/MEM16
+                decode();
+                dst = getReg(w, reg);
+                src = getRM(w, mod, rm);
+                res = sbb(w, dst, src);
+                setReg(w, reg, res);
+                break;
+
+            // Immediate to Accumulator
+            case 0x1c: // SBB AL,IMMED8
+            case 0X1d: // SBB AX,IMMED16
+                dst = getReg(w, 0b000);
+                src = getMem(ip++);
+                if (w == 0b1)
+                    src |= getMem(ip++) << 8;
+                res = sbb(w, dst, src);
+                setReg(w, 0b000, res);
+                break;
+
+            /*
+             * DEC destination
+             *
+             * DEC (Decrement) subtracts one from the destination, which may be
+             * a byte or a word. DEC updates AF, OF, PF, SF, and ZF; it does not
+             * affect CF.
+             */
+            // Register
+            case 0x48: // DEC AX
+            case 0x49: // DEC CX
+            case 0x4a: // DEC DX
+            case 0x4b: // DEC BX
+            case 0x4c: // DEC SP
+            case 0x4d: // DEC BP
+            case 0x4e: // DEC SI
+            case 0x4f: // DEC DI
+                reg = queue[0] & 0b111;
+                dst = getReg(0b1, reg);
+                res = dec(0b1, dst);
+                setReg(0b1, reg, res);
+                break;
+
+            /*
+             * NEG destination
+             *
+             * NEG (Negate) subtracts the destination operand, which may be a
+             * byte or a word, from 0 and returns the result to the destination.
+             * This forms the two's complement of the number, effectively
+             * reversing the sign of an integer. If the operand is zero, its
+             * sign is not changed. Attempting to negate a byte containing -128
+             * or a word containing -32,768 causes no change to the operand and
+             * sets OF. NEG updates AF, CF, OF, PF, SF and ZF. CF is always set
+             * except when the operand is zero, in which case it is cleared.
+             */
+
+            /*
+             * CMP destination,source
+             *
+             * CMP (Compare) subtracts the source from the destination, which
+             * may be bytes or words, but does not return the result. The
+             * operands are unchanged, but the flags are updated and can be
+             * tested by the subsequent conditional jump instructions. CMP
+             * updates AF, CF, OF, PF, SF and ZF. The comparison reflected in
+             * the flags is that of the destination to the source. If a CMP
+             * instruction is followed by a JG (jump if greater) instruction,
+             * for example, the jump is taken if the destination operand is
+             * greater than the source operand.
+             */
+            // Register/Memory and Register
+            case 0x38: // CMP REG8/MEM8,REG8
+            case 0x39: // CMP REG16/MEM16,REG16
+                decode();
+                dst = getRM(w, mod, rm);
+                src = getReg(w, reg);
+                sub(w, dst, src);
+                break;
+            case 0x3a: // CMP REG8,REG8/MEM8
+            case 0x3b: // CMP REG16,REG16/MEM16
+                decode();
+                dst = getReg(w, reg);
+                src = getRM(w, mod, rm);
+                sub(w, dst, src);
+                break;
+
+            // Immediate with Accumulator
+            case 0x3c: // CMP AL,IMMED8
+            case 0x3d: // CMP AX,IMMED16
+                dst = getReg(w, 0b000);
+                src = getMem(ip++);
+                if (w == 0b1)
+                    src |= getMem(ip++) << 8;
+                sub(w, dst, src);
+                break;
+
+            /*
+             * AAS
+             *
+             * AAS (ASCII Adjust for Subtraction) corrects the result of a
+             * previous subtraction of two valid unpacked decimal operands (the
+             * destination operand must have been specified as register AL). AAS
+             * changes the content of AL to a valid unpacked decimal number; the
+             * high-order half-byte is zeroed. AAS updates AF and CF; the
+             * content of OF, PF, SF and ZF is undefined following execution of
+             * AAS.
+             */
+            case 0x3f: // AAS
+                if ((al & 0xf) > 9 || getFlag(AF)) {
+                    al -= 6;
+                    ah = ah - 1 & 0xff;
+                    setFlag(CF, true);
+                    setFlag(AF, true);
+                } else {
+                    setFlag(CF, false);
+                    setFlag(AF, false);
+                }
+                al &= 0xf;
+                break;
+
+            /*
+             * DAS
+             *
+             * DAS (Decimal Adjust for Subtraction) corrects the result of a
+             * previous subtraction of two valid packed decimal operands (the
+             * destination operand must have been specified as register AL). DAS
+             * changes the content of AL to a pair of valid packed decimal
+             * digits. DAS updates AF, CF, PF, SF and ZF; the content of OF is
+             * undefined following the execution of DAS.
+             */
+            case 0x2f: // DAS
+            {
+                final int oldAL = al;
+                final boolean oldCF = getFlag(CF);
+                setFlag(CF, false);
+                if ((al & 0xf) > 9 || getFlag(AF)) {
+                    al -= 6;
+                    setFlag(CF, oldCF || (al & 0xff) > 0);
+                    al &= 0xff;
+                    setFlag(AF, true);
+                } else
+                    setFlag(AF, false);
+                if (oldAL > 0x99 || oldCF) {
+                    al = al - 0x60 & 0xff;
+                    setFlag(CF, true);
+                } else
+                    setFlag(CF, false);
+                setFlags(0b0, al);
+                break;
+            }
+
+            /*
+             * Multiplication
+             */
+            /*
+             * MUL source
+             *
+             * MUL (Multiply) performs an unsigned multiplication of the source
+             * operand and the accumulator. If the source is a byte, then it is
+             * multiplied by register AL, and the double-length result is
+             * returned in AH and AL. If the source operand is a word, then it
+             * is multiplied by register AX, and the double-length result is
+             * returned in registers DX and AX. The operands are treated as
+             * unsigned binary numbers. If the upper half of the result (AH for
+             * byte source, DX for word source) is nonzero, CF and OF are set;
+             * otherwise they are cleared. When CF and OF are set, they indicate
+             * that AH or DX contains significant digits of the result. The
+             * content of AF, PF, SF and ZF is undefined following execution of
+             * MUL.
+             */
+
+            /*
+             * IMUL source
+             *
+             * IMUL (Integer Multiply) performs a signed multiplication of the
+             * source operand and the accumulator. If the source is a byte, then
+             * it is multiplied by register AL, and the double-length result is
+             * returned in AH and AL. If the source is a word, then it is
+             * multiplied by register AX, and the double-length result is
+             * returned in registers DX and AX. If the upper half of the result
+             * (AH for byte source, DX for word source) is not the sign
+             * extension of the lower half of the result, CF and OF are set,
+             * they indicate that AH of DX contains significant digits of the
+             * result. The content of AF, PF, SF and ZF is undefined following
+             * execution of IMUL.
+             */
+
+            /*
+             * AAM
+             *
+             * AAM (ASCII Adjust for Multiply) corrects the result of a previous
+             * multiplication of two valid unpacked decimal operands. A valid 2-
+             * digit unpacked decimal number is derived from the content of AH
+             * and AL and is returned to AH and AL. The high-order half-bytes of
+             * the multiplied operands must have been 0H for AAM to produce a
+             * correct result. AAM updates PF, SF and ZF; the content of AF, CF
+             * and OF is undefined following execution of AAM.
+             */
+            case 0xd4: // AAM
+                src = getMem(ip++);
+                if (src == 0)
+                    break; //TODO Generate a type 0 interrupt.
+                ah = (al / src) & 0xff;
+                al = (al % src) & 0xff;
+                setFlags(0b1, ah << 8 | al);
+                break;
+
+            /*
+             * Division
+             */
+            /*
+             * DIV source
+             *
+             * DIV (divide) performs an unsigned division of the accumulator
+             * (and its extension) by the source operand. If the source operand
+             * is a byte, it is divided into the double-length dividend assumed
+             * to be in register AL and AH. The single-length quotient is
+             * returned in AL, and the single-length remainder is returned in
+             * AH. If the source operand is a word, it is divided into the
+             * double-length dividend in register AX and DX. The single-length
+             * quotient is returned in AX, and the single-length remainder is
+             * returned in DX. If the quotient exceeds the capacity of its
+             * destination register (FFH for byte source, FFFFH for word
+             * source), as when division by zero is attempted, a type 0
+             * interrupt is generated, and the quotient and remainder are
+             * undefined. Nonintegral quotients are truncated to integers. The
+             * content of AF, CF, OF, PF, SF and ZF is undefined following
+             * execution of DIV.
+             */
+
+            /*
+             * IDIV source
+             *
+             * IDIV (Integer Divide) performs a signed division of the
+             * accumulator (and its extension) by the source operand. If the
+             * source operand is a byte, it is divided into the double-length
+             * dividend assumed to be in register AL and AH; the single-length
+             * quotient is returned in AL, and the single-length remainder is
+             * returned in AH. For byte integer division, the maximum position
+             * quotient is +127 (7FH) and the minimum negative quotient is -127
+             * (81H). If the source operand is a word, it is divided into the
+             * double-length dividend in register AX and DX; the single-length
+             * quotient is returned in AX, and the single-length remainder is
+             * returned in DX. For word integer division, the maximum positive
+             * quotient is +32,767 (7FFFH) and the minimum negative quotient is
+             * -32,767 (8001H). If the quotient is positive and exceeds the
+             * maximum, or is negative and is less than the minimum, the
+             * quotient and remainder are undefined, and a type 0 interrupt is
+             * generated. In particular, this occurs if division by 0 is
+             * attempted. Nonintegral quotients are truncated (toward 0) to
+             * integers, and the remainder has the same sign as the dividend.
+             * The content of AF, CF, OF, PF, SF and ZF is undefined following
+             * IDIV.
+             */
+
+            /*
+             * AAD
+             *
+             * AAD (ASCII Adjust for Division) modifies the numerator in AL
+             * before dividing two valid unpacked decimal operands so that the
+             * quotient produced by the division will be a valid unpacked
+             * decimal number. AH must be zero for the subsequent DIV to produce
+             * the correct result. The quotient is returned in AL, and the
+             * remainder is returned in AH; both high-order half-bytes are
+             * zeroed. AAD updates PF, SF and ZF; the content of AF, CF and OF
+             * is undefined following execution of AAD.
+             */
+            case 0xd5: // AAD
+                src = getMem(ip++);
+                al = ah * src + al & 0xff;
+                ah = 0;
+                setFlags(0b0, al);
+                break;
+
+            /*
+             * CBW
+             *
+             * CBW (Convert Byte to Word) extends the sign of the byte in
+             * register AL throughout register AH. CBW does not affect any
+             * flags. CBW can be used to produce a double-length (word) dividend
+             * from a byte prior to performing byte division.
+             */
+            case 0x98: // CBW
+                if ((al & 0x80) == 0x80)
+                    ah = 0xff;
+                else
+                    ah = 0x00;
+                break;
+
+            /*
+             * CWD
+             *
+             * CWD (Convert Word to Doubleword) extends the sign of the word in
+             * register AX throughout register DX. CWD does not affect any
+             * flags. CWD can be used to produce a double-length (doubleword)
+             * dividend from a word prior to performing word division.
+             */
+            case 0x99: // CWD
+                if ((ah & 0x80) == 0x80) {
+                    dl = 0xff;
+                    dh = 0xff;
+                } else {
+                    dl = 0x00;
+                    dh = 0x00;
+                }
+                break;
+
+            /*
+             * Bit Manipulation Instructions
+             *
+             * The 8086 provides three groups of instructions for manipulating
+             * bits within both bytes and words: logical, shifts and rotates.
+             */
+            /*
+             * Logical
+             *
+             * The logical instructions include the boolean operators "not,"
+             * "and," "inclusive or," and "exclusive or," plus a TEST
+             * instruction that sets the flags, but does not alter either of its
+             * operands.
+             *
+             * AND, OR, XOR and TEST affect the flags as follows: the overflow
+             * (OF) and carry (CF) flags are always cleared by logical
+             * instructions, and the content of the auxiliary carry (AF) flag is
+             * always undefined following execution of a logical instruction.
+             * The sign (SF), zero (ZF) and parity (PF) flags are always posted
+             * to reflect the result of the operation and can be tested by
+             * conditional jump instructions. The interpretation of these flags
+             * is the same as for arithmetic instructions. SF is set if the
+             * result is negative (high-order bit is 1), and is cleared if the
+             * result is positive (high-order bit is 0). ZF is set if the result
+             * is zero, cleared otherwise. PF is set if the result contains an
+             * even number of 1-bits (has even parity) and is cleared if the
+             * number of 1-bits is odd (the result has odd parity). Note that
+             * NOT has no effect on the flags.
+             */
+            /*
+             * NOT destination
+             *
+             * NOT inverts the bits (forms the one's complement) of the byte or
+             * word operand.
+             */
+
+            /*
+             * AND destination,source
+             *
+             * AND performs the logical "and" of the two operands (byte or word)
+             * and returns the result to the destination operand. A bit in the
+             * result is set if both corresponding bits of the original operands
+             * are set; otherwise the bit is cleared.
+             */
+            // Register/Memory and Register
+            case 0x20: // AND REG8/MEM8,REG8
+            case 0x21: // AND REG16/MEM16,REG16
+                decode();
+                dst = getRM(w, mod, rm);
+                src = getReg(w, reg);
+                res = dst & src;
+                logic(w, res);
+                setRM(w, mod, rm, res);
+                break;
+            case 0x22: // AND REG8,REG8/MEM8
+            case 0x23: // AND REG16,REG16/MEM16
+                decode();
+                dst = getReg(w, reg);
+                src = getRM(w, mod, rm);
+                res = dst & src;
+                logic(w, res);
+                setReg(w, reg, res);
+                break;
+
+            // Immediate to Accumulator
+            case 0x24: // AND AL,IMMED8
+            case 0x25: // AND AX,IMMED16
+                dst = getReg(w, 0b000);
+                src = getMem(ip++);
+                if (w == 0b1)
+                    src |= getMem(ip++) << 8;
+                res = dst & src;
+                logic(w, res);
+                setReg(w, 0b000, res);
+                break;
+
+            /*
+             * OR destination,source
+             *
+             * OR performs the logical "inclusive or" of the two operands (byte
+             * or word) and returns the result to the destination operand. A bit
+             * in the result is set if either or both corresponding bits of the
+             * original operands are set; otherwise the result bit is cleared.
+             */
+            // Register/Memory and Register
+            case 0x08: // OR REG8/MEM8,REG8
+            case 0x09: // OR REG16/MEM16,REG16
+                decode();
+                dst = getRM(w, mod, rm);
+                src = getReg(w, reg);
+                res = dst | src;
+                logic(w, res);
+                setRM(w, mod, rm, res);
+                break;
+            case 0x0a: // OR REG8,REG8/MEM8
+            case 0x0b: // OR REG16,REG16/MEM16
+                decode();
+                dst = getReg(w, reg);
+                src = getRM(w, mod, rm);
+                res = dst | src;
+                logic(w, res);
+                setReg(w, reg, res);
+                break;
+
+            // Immediate to Accumulator
+            case 0x0c: // OR AL,IMMED8
+            case 0x0d: // OR AX,IMMED16
+                dst = getReg(w, 0b000);
+                src = getMem(ip++);
+                if (w == 0b1)
+                    src |= getMem(ip++) << 8;
+                res = dst | src;
+                logic(w, res);
+                setReg(w, 0b000, res);
+                break;
+
+            /*
+             * XOR destination,source
+             *
+             * XOR (Exclusive Or) performs the logical "exclusive or" of the two
+             * operands and returns the result to the destination operand. A bit
+             * in the result if set if the corresponding bits of the original
+             * operands contain opposite values (one is set, the other is
+             * cleared); otherwise the result bit is cleared.
+             */
+            // Register/Memory and Register
+            case 0x30: // XOR REG8/MEM8,REG8
+            case 0x31: // XOR REG16/MEM16,REG16
+                decode();
+                dst = getRM(w, mod, rm);
+                src = getReg(w, reg);
+                res = dst ^ src;
+                logic(w, res);
+                setRM(w, mod, rm, res);
+                break;
+            case 0x32: // XOR REG8,REG8/MEM8
+            case 0x33: // XOR REG16,REG16/MEM16
+                decode();
+                dst = getReg(w, reg);
+                src = getRM(w, mod, rm);
+                res = dst ^ src;
+                logic(w, res);
+                setReg(w, reg, res);
+                break;
+
+            // Immediate to Accumulator
+            case 0x34: // XOR AL,IMMED8
+            case 0x35: // XOR AX,IMMED16
+                dst = getReg(w, 0b000);
+                src = getMem(ip++);
+                if (w == 0b1)
+                    src |= getMem(ip++) << 8;
+                res = dst ^ src;
+                logic(w, res);
+                setReg(w, 0b000, res);
+                break;
+
+            /*
+             * TEST destination,source
+             *
+             * TEST performs the logical "and" of the two operands (byte or
+             * word), updates the flags, but does not return the result, i.e.,
+             * neither operand is changed. If a TEST instruction is followed by
+             * a JNZ (jump if not zero) instruction, the jump will be taken if
+             * there are any corresponding 1-bits in both operands.
+             */
+            // Register/Memory and Register
+            case 0x84: // TEST REG8/MEM8,REG8
+            case 0x85: // TEST REG16/MEM16,REG16
+                decode();
+                dst = getRM(w, mod, rm);
+                src = getReg(w, reg);
+                logic(w, dst & src);
+                break;
+
+            // Immediate and Accumulator
+            case 0xa8: // TEST AL,IMMED8
+            case 0xa9: // TEST AX,IMMED16
+                dst = getReg(w, 0b000);
+                src = getMem(ip++);
+                if (w == 0b1)
+                    src |= getMem(ip++) << 8;
+                logic(w, dst & src);
+                break;
+
+            /*
+             * Shifts
+             *
+             * The bits in bytes and words may be shifted arithmetically or
+             * logically. Up to 255 shifts may be performed, according to the
+             * value of the count operand coded in the instruction. The count
+             * may be specified as the constant l, or as register CL, allowing
+             * the shift count to be a variable supplied at execution time.
+             * Arithmetic shifts may be used to multiply and divide binary
+             * numbers by powers of two. Logical shifts can be used to isolate
+             * bits in bytes or words.
+             *
+             * Shift instructions affect the flags as follows. AF is always
+             * undefined following a shift operation. PF, SF and ZF are updated
+             * normally, as in the logical instructions. CF always contains the
+             * value of the last bit shifted out of the destination operand. The
+             * content of OF is always undefined following a multibit shift. In
+             * a single-bit shift, OF is set if the value of the high-order
+             * (sign) bit was changed by the operation; if the sign bit retains
+             * its original value, OF is cleared.
+             */
+            /*
+             * SHL/SAL destination, count
+             *
+             * SHL and SAL (Shift Logical Left and Shift Arithmetic Left)
+             * perform the same operation and are physically the same
+             * instruction. The destination byte or word is shifted left by the
+             * number of bits specified in the count operand. Zeros are shifted
+             * in on the right. If the sign bit retains its original value, then
+             * OF is cleared.
+             */
+
+            /*
+             * SHR destination, source
+             *
+             * SHR (Shift Logical Right) shifts the bits in the destination
+             * operand (byte or word) to the right by the number of bits
+             * specified in the count operand. Zeros are shifted in on the left.
+             * If the sign bit retains its original value, then OF is cleared.
+             */
+
+            /*
+             *
+             *
+             * SAR destination, count
+             *
+             * SAR (Shift Arithmetic Right) shifts the bits in the destination
+             * operand (byte or word) to the right by the number of bits
+             * specified in the count operand. Bits equal to the original high-
+             * order (sign) bit are shifted in on the left, preserving the sign
+             * of the original value. Note that SAR does not produce the same
+             * result as the dividend of an "equivalent" IDIV instruction if the
+             * destination operand is negative and l-bits are shifted out. For
+             * example, shifting -5 right by one bit yields -3, while integer
+             * division of -5 by 2 yields -2. The difference in the instructions
+             * is that IDIV truncates all numbers toward zero, while SAR
+             * truncates positive numbers toward zero and negative numbers
+             * toward negative infinity.
+             */
+
+            /*
+             * Rotates
+             *
+             * Bits in bytes and words also may be rotated. Bits rotated out of
+             * an operand are not lost as in a shift, but are "circled" back
+             * into the other "end" of the operand. As in the shift
+             * instructions, the number of bits to be rotated is taken from the
+             * count operand, which may specify either a constant of l, or the
+             * CL register. The carry flag may act as an extension of the
+             * operand in two of the rotate instructions, allowing a bit to be
+             * isolated in CF and then tested by a JC (jump if carry) or JNC
+             * (jump if not carry) instruction.
+             *
+             * Rotates affect only the carry and overflow flags. CF always
+             * contains the value of the last bit rotated out. On multibit
+             * rotates, the value of OF is always undefined. In single-bit
+             * rotates, OF is set if the operation changes the high-order (sign)
+             * bit of the destination operand. If the sign bit retains its
+             * original value, OF is cleared.
+             */
+            /*
+             * ROL destination,count
+             *
+             * ROL (Rotate Left) rotates the destination byte or word left by
+             * the number of bits specified in the count operand.
+             */
+
+            /*
+             * ROR destination,count
+             *
+             * ROR (Rotate Right) operates similar to ROL except that the bits
+             * in the destination byte or word are rotated right instead of
+             * left.
+             */
+
+            /*
+             * RCL destination,count
+             *
+             * RCL (Rotate through Carry Left) rotates the bits in the byte or
+             * word destination operand to the left by the number of bits
+             * specified in the count operand. The carry flag (CF) is treated as
+             * "part of" the destination operand; that is, its value is rotated
+             * into the low-order bit of the destination, and itself is replaced
+             * by the high-order bit of the destination.
+             */
+
+            /*
+             * RCR destination,count
+             *
+             * RCR (Rotate through Carry Right) operates exactly like RCL except
+             * that the bits are rotated right instead of left.
+             */
+
+            /*
+             * String Instructions
+             *
+             * Five basic string operations, called primitives, allow strings of
+             * bytes or words to be operated on, one element (byte or word) at a
+             * time. Strings of up to 64k bytes may be manipulated with these
+             * instructions. Instructions are available to move, compare and
+             * scan for a value, as well as for moving string elements to and
+             * from the accumulator. These basic operations may be preceded by a
+             * special one-byte prefix that causes the instruction to be
+             * repeated by the hardware, allowing long strings to be processed
+             * much faster than would be possible with a software loop. The
+             * repetitions can be terminated by a variety of conditions, and a
+             * repeated operation may be interrupted and resumed.
+             *
+             * The string instructions operate quite similarly in many respects;
+             * the common characteristics are covered here rather than in the
+             * descriptions of the individual instructions. A string instruction
+             * may have a source operand, a destination operand, or both. The
+             * hardware assumes that a source string resides in the current data
+             * segment; a segment prefix byte may be used to override this
+             * assumption. A destination string must be in the current extra
+             * segment. The assembler checks the attributes of the operands to
+             * determine if the elements of the strings are bytes or words. The
+             * assembler does not, however, use the operand names to address the
+             * strings. Rather, the content of register SI (source index) is
+             * used as an offset to address the current element of the source
+             * string, and the content of register DI (destination index) is
+             * taken as the offset of the current destination string element.
+             * These registers must be initialized to point to the
+             * source/destination strings before executing the string
+             * instruction; the LDS, LES and LEA instructions are useful in this
+             * regard.
+             *
+             * The string instructions automatically update SI and/or DI in
+             * anticipation of processing the next string element. The setting
+             * of DF (the direction flag) determines whether the index registers
+             * are auto- incremented (DF = 0) or auto-decremented (DF = I). If
+             * byte strings are being processed, SI and/or DI is adjusted by 1;
+             * the adjustment is 2 for word strings.
+             *
+             * If a Repeat prefix has been coded, then register CX (count
+             * register) is decremented by 1 after each repetition of the string
+             * instruction; therefore, CX must be initialized to the number of
+             * repetitions desired before the string instruction is executed. If
+             * CX is 0, the string instruction is not executed, and control goes
+             * to the following instruction.
+             */
+            /*
+             * REP/REPE/REPZ/REPNE/REPNZ
+             *
+             * Repeat, Repeat While Equal, Repeat While Zero, Repeat While Not
+             * Equal and Repeat While Not Zero are five mnemonics for two forms
+             * of the prefix byte that controls repetition of a subsequent
+             * string instruction. The different mnemonics are provided to
+             * improve program clarity. The repeat prefixes do not affect the
+             * flags.
+             *
+             * REP is used in conjunction with the MOVS (Move String) and STOS
+             * (Store String) instructions and is interpreted as "repeat while
+             * not end-of-string" (CX not 0). REPE and REPZ operate identically
+             * and are physically the same prefix byte as REP. These
+             * instructions are used with the CMPS (Compare String) and SCAS
+             * (Scan String) instructions and require ZF (posted by these
+             * instructions) to be set before initiating the next repetition.
+             * REPNE and REPNZ. are two mnemonics for the same prefix byte.
+             * These instructions function the same as REPE and REPZ except that
+             * the zero flag must be cleared or the repetition is terminated.
+             * Note that ZF does not need to be initialized before executing the
+             * repeated string instruction.
+             *
+             * Repeated string sequences are interruptible; the processor will
+             * recognize the interrupt before processing the next string
+             * element. System interrupt processing is not affected in any way.
+             * Upon return from the interrupt, the repeated operation is resumed
+             * from the point of interruption. Note, however, that execution
+             * does not resume properly if a second or third prefix (i.e.,
+             * segment override or LOCK) has been specified in addition to any
+             * of the repeat prefixes. The processor "remembers" only one prefix
+             * in effect at the time of the interrupt, the prefix that
+             * immediately precedes the string instruction. After returning from
+             * the interrupt, processing resumes at this point, but any
+             * additional prefixes specified are not in effect. If more than one
+             * prefix must be used with a string instruction, interrupts may be
+             * disabled for the duration of the repeated execution. However,
+             * this will not prevent a non-maskable interrupt from being
+             * recognized. Also, the time that the system is unable to respond
+             * to interrupts may be unacceptable if long strings are being
+             * processed.
+             */
+
+            /*
+             * MOVS destination-string,source-string
+             *
+             * MOVS (Move String) transfers a byte or a word from the source
+             * string (addressed by SI) to the destination string (addressed by
+             * DI) and updates SI and DI to point to the next string element.
+             * When used in conjunction with REP, MOVS performs a memory-to-
+             * memory block transfer.
+             */
+            /*
+             * MOVSB/MOVSW
+             *
+             * These are alternate mnemonics for the move string instruction.
+             * These mnemonics are coded without operands; they explicitly tell
+             * the assembler that a byte string (MOVSB) or a word string (MOVSW)
+             * is to be moved (when MOVS is coded, the assembler determines the
+             * string type from the attributes of the operands). These mnemonics
+             * are useful when the assembler cannot determine the attributes of
+             * a string, e.g., a section of code is being moved.
+             */
+            case 0xa4: // MOVS DEST-STR8,SRC-STR8
+            case 0xa5: // MOVS DEST-STR16,SRC-STR16
+                src = getMem(os, si);
+                if (w == 0b1)
+                    src |= getMem(os, si + 1) << 8;
+                setMem(es, di, src & 0xff);
+                if (w == 0b1)
+                    setMem(es, di + 1, src >>> 8 & 0xff);
+                break;
+
+            /*
+             * CMPS destination-string,source-string
+             *
+             * CMPS (Compare String) subtracts the destination byte or word
+             * (addressed by DI) from the source byte or word (addressed by SI).
+             * CMPS affects the flags but does not alter either operand, updates
+             * SI and DI to point to the next string element and updates AF, CF,
+             * OF, PF, SF and ZF to reflect the relationship of the destination
+             * element to the source element. For example, if a JG (Jump if
+             * Greater) instruction follows CMPS, the jump is taken if the
+             * destination element is greater than the source element. If CMPS
+             * is prefixed with REPE or REPZ, the operation is interpreted as
+             * "compare while not end-of-string (CX not zero) and strings are
+             * equal (ZF = 1)." If CMPS is preceded by REPNE or REPNZ, the
+             * operation is interpreted as "compare while not end-of-string (CX
+             * not zero) and strings are not equal (ZF = 0)." Thus, CMPS can be
+             * used to find matching or differing string elements.
+             */
+            case 0xa6: // CMPS DEST-STR8,SRC-STR8
+            case 0xa7: // CMPS DEST-STR16,SRC-STR16
+                dst = getMem(es, di);
+                if (w == 0b1)
+                    dst |= getMem(es, di + 1) << 8;
+                src = getMem(os, si);
+                if (w == 0b1)
+                    src |= getMem(os, si + 1) << 8;
+                sub(w, src, dst);
+                if (rep == 1 && !getFlag(ZF) || rep == 2 && getFlag(ZF))
+                    rep = 0;
+                break;
+
+            /*
+             * SCAS destination-string
+             *
+             * SCAS (Scan String) subtracts the destination string element (byte
+             * or word) addressed by DI from the content of AL (byte string) or
+             * AX (word string) and updates the flags, but does not alter the
+             * destination string or the accumulator. SCAS also updates DI to
+             * point to the next string element and AF, CF, OF, PF, SF and ZF to
+             * reflect the relationship of the scan value in AL/AX to the string
+             * element. If SCAS is prefixed with REPE or REPZ, the operation is
+             * interpreted as "scan while not end-of-string (CX not 0) and
+             * string-element = scan-value (ZF = 1)." This form may be used to
+             * scan for departure from a given value. If SCAS is prefixed with
+             * REPNE or REPNZ, the operation is interpreted as "scan while not
+             * end-of-string (CX not 0) and string-element is not equal to
+             * scan-value (ZF = 0)." This form may be used to locate a value in
+             * a string.
+             */
+            case 0xae: // SCAS DEST-STR8
+            case 0xaf: // SCAS DEST-STR16
+                dst = getMem(es, di);
+                if (w == 0b1)
+                    dst |= getMem(es, di + 1) << 8;
+                src = al;
+                if (w == 0b1)
+                    src |= ah << 8;
+                sub(w, src, dst);
+                if (rep == 1 && !getFlag(ZF) || rep == 2 && getFlag(ZF))
+                    rep = 0;
+                break;
+
+            /*
+             * LODS source-string
+             *
+             * LODS (Load String) transfers the byte or word string element
+             * addressed by SI to register AL or AX, and updates SI to point to
+             * the next element in the string. This instruction is not
+             * ordinarily repeated since the accumulator would be overwritten by
+             * each repetition, and only the last element would be retained.
+             * However, LODS is very useful in software loops as part of a more
+             * complex string function built up from string primitives and other
+             * instructions.
+             */
+            case 0xac: // LODS SRC-STR8
+            case 0xad: // LODS SRC-STR16
+                src = getMem(os, si);
+                if (w == 0b1)
+                    src |= getMem(os, si + 1) << 8;
+                al = src & 0xff;
+                if (w == 0b1)
+                    ah = src >>> 8 & 0xff;
+                break;
+
+            /*
+             * STOS destination-string
+             *
+             * STOS (Store String) transfers a byte or word from register AL or
+             * AX to the string element addressed by DI and updates DI to point
+             * to the next location in the string. As a repeated operation, STOS
+             * provides a convenient way to initialize a string to a constant
+             * value (e.g., to blank out a print line).
+             */
+            case 0xaa: // STOS DEST-STR8
+            case 0xab: // STOS DEST-STR16
+                src = al;
+                if (w == 0b1)
+                    src |= ah << 8;
+                setMem(es, di, src & 0xff);
+                if (w == 0b1)
+                    setMem(es, di + 1, src >>> 8 & 0xff);
+                break;
+
+            /*
+             * Program Transfer Instructions
+             *
+             * The sequence of execution of instructions in an 8086 program is
+             * determined by the content of the code segment register (CS) and
+             * the instruction pointer (IP). The CS register contains the base
+             * address of the current code segment, the 64k portion of memory
+             * from which instructions are presently being fetched. The IP is
+             * used as an offset from the beginning of the code segment; the
+             * combination of CS and IP points to the memory location from which
+             * the next instruction is to be fetched. (Recall that under most
+             * operating conditions, the next instruction to be executed has
+             * already been fetched from memory and is waiting in the CPU
+             * instruction queue.) The program transfer instructions operate on
+             * the instruction pointer and on the CS register; changing the
+             * content of these causes normal sequential execution to be
+             * altered. When a program transfer occurs, the queue no longer
+             * contains the correct instruction, and the BIU obtains the next
+             * instruction from memory using the new IP and CS values, passes
+             * the instruction directly to the EU, and then begins refilling the
+             * queue from the new location.
+             *
+             * Four groups of program transfers are available in the 8086:
+             * unconditional transfers, conditional transfers, iteration control
+             * instructions and interrupt-related instructions. Only the
+             * interrupt- related instruction affect any CPU flags. As will be
+             * seen, however, the execution of many of the program transfer
+             * instructions is affected by the states of the flags.
+             */
+            /*
+             * Unconditional Transfers
+             *
+             * The unconditional transfers instructions may transfer control to
+             * a target instruction within the current code segment
+             * (intrasegment transfer) or to a different code segment
+             * (intersegment transfer). (The ASM-86 assembler terms an
+             * intrasegment target NEAR and an intersegment target FAR.) The
+             * transfer is made unconditionally any time the instruction is
+             * executed.
+             */
+            /*
+             * CALL procedure-name
+             *
+             * CALL activated an out-of-line procedure, saving information on
+             * the stack to permit a RET (return) instruction in the procedure
+             * to transfer control back to the instruction following the CALL.
+             * The assembler generates a different type of CALL instruction
+             * depending on whether the programmer has defined the procedure
+             * name as NEAR or FAR. For control to return properly, the type of
+             * CALL instruction must match the type of RET instruction that
+             * exists from the procedure. (The potential for a mismatch exists
+             * if the procedure and the CALL are contained in separately
+             * assembled programs.) Different forms of the CALL instruction
+             * allow the address of the target procedure to be obtained from the
+             * instruction itself (direct CALL) or from a memory location or
+             * register referenced by the instruction (indirect CALL). In the
+             * following descriptions, bear in mind that the processor
+             * automatically adjusts IP to point to the next instruction to be
+             * executed before saving it on the stack.
+             *
+             * For an intrasegment direct CALL, SP (the stack pointer) is
+             * decremented by two and IP is pushed onto the stack. The relative
+             * displacement (up to ±32k) of the target procedure from the CALL
+             * instruction is then added to the instruction pointer. This form
+             * of the CALL instruction is "self-relative" and is appropriate for
+             * position independent (dynamically relocatable) routines in which
+             * the CALL and its target are in the same segment and are moved
+             * together.
+             *
+             * An intrasegment indirect CALL may be made through memory or
+             * through a register. SP is decremented by two and IP is pushed
+             * onto the stack. The offset of the target procedure is obtained
+             * from the memory word or 16-bit general register referenced in the
+             * instruction and replaces IP.
+             *
+             * For an intersegment direct CALL, SP is decremented by two, and CS
+             * is pushed onto the stack. CS is replaced by the segment word
+             * contained in the instruction. SP again is decremented by two. IP
+             * is pushed onto the stack and is replaced by the offset word
+             * contained in the instruction.
+             *
+             * For an intersegment indirect CALL (which only may be made through
+             * memory), SP is decremented by two, and CS is pushed onto the
+             * stack. CS is then replaced by the content of the second word of
+             * the doubleword memory pointer referenced by the instruction. SP
+             * again is decremented by two, and IP is pushed onto the stack and
+             * is replaced by the content of the first word of the doubleword
+             * pointer referenced by the instruction.
+             */
+            // Direct with Segment
+            case 0xe8: // CALL NEAR-PROC
+                dst = getMem(ip++);
+                dst |= getMem(ip++) << 8;
+                dst = signext(0b1, dst);
+                push(ip);
+                ip += dst;
+                break;
+
+            // Direct Intersegment
+            case 0x9a: // CALL FAR-PROC
+                dst = getMem(ip++);
+                dst |= getMem(ip++) << 8;
+                src = getMem(ip++);
+                src |= getMem(ip++) << 8;
+                push(cs);
+                push(ip);
+                ip = dst;
+                cs = src;
+                break;
+
+            /*
+             * RET optional-pop-value
+             *
+             * RET (Return) transfers control from a procedure back to the
+             * instruction following the CALL that activated the procedure. The
+             * assembler generates an intrasegment RET if the programmer has
+             * defined the procedure NEAR, or an intersegment RET if the
+             * procedure has been defined as FAR. RET pops the word at the top
+             * of the stack (pointed to by the register SP) into the instruction
+             * pointer and increments SP by two. If RET is intersegment, the
+             * word at the top of the stack is popped into the CS register, and
+             * SP is again incremented by two. If an optional pop value has been
+             * specified, RET adds that value to SP. This feature may be used to
+             * discard parameters pushed onto the stack before the execution of
+             * the CALL instruction.
+             */
+            // Within Segment
+            case 0xc3: // RET (intrasegment)
+                ip = pop();
+                break;
+
+            // Within Seg Adding Immed to SP
+            case 0xc2: // RET IMMED16 (intraseg)
+                src = getMem(ip++);
+                src |= getMem(ip++) << 8;
+                ip = pop();
+                sp += src;
+                break;
+
+            // Intersegment
+            case 0xcb: // RET (intersegment)
+                ip = pop();
+                cs = pop();
+                break;
+
+            // Intersegment Adding Immediate to SP
+            case 0xca: // RET IMMED16 (intersegment)
+                src = getMem(ip++);
+                src |= getMem(ip++) << 8;
+                ip = pop();
+                cs = pop();
+                sp += src;
+                break;
+
+            /*
+             * JMP target
+             *
+             * JMP unconditionally transfers control to the target location.
+             * Unlike a CALL instruction, JMP does not save any information on
+             * the stack, and no return to the instruction following the JMP is
+             * expected. Like CALL, the address of the target operand may be
+             * obtained from the instruction itself (direct JMP) or from memory
+             * or a register referenced by the instruction (indirect JMP).
+             *
+             * An intrasegment direct JMP changes the instruction pointer by
+             * adding the relative displacement of the target from the JMP
+             * instruction. If the assembler can determine that the target is
+             * within 127 bytes of the JMP, it automatically generates a two-
+             * byte form of this instruction called a SHORT JMP; otherwise, it
+             * generates a NEAR JMP that can address a target within ±32k.
+             * Intrasegment direct JMPS are self-relative and are appropriate in
+             * position-independent (dynamically relocatable) routines in which
+             * the JMP and its target are in the same segment and are moved
+             * together.
+             *
+             * An intrasegment indirect JMP may be made either through memory or
+             * through a 16-bit general register. In the first case, the content
+             * of the word referenced by the instruction replaces the
+             * instruction pointer. In the second case, the new IP value is
+             * taken from the register named in the instruction.
+             *
+             * An intersegment direct JMP replaces IP and CS with values
+             * contained in the instruction.
+             *
+             * An intersegment indirect JMP may be made only through memory. The
+             * first word of the doubleword pointer referenced by the
+             * instruction replaces IP, and the second word replaces CS.
+             */
+            // Direct within Segment
+            case 0xe9: // JMP NEAR-LABEL
+                dst = getMem(ip++);
+                dst |= getMem(ip++) << 8;
+                dst = signext(0b1, dst);
+                ip += dst;
+                break;
+
+            // Direct within Segment-Short
+            case 0xeb: // JMP SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                ip += dst;
+                break;
+
+            // Direct Intersegment
+            case 0xea: // JMP FAR-LABEL
+                dst = getMem(ip++);
+                dst |= getMem(ip++) << 8;
+                src = getMem(ip++);
+                src |= getMem(ip++) << 8;
+                ip = dst;
+                cs = src;
+                break;
+
+            /*
+             * Conditional Transfers
+             *
+             * The conditional transfer instructions are jumps that may or may
+             * not transfer control depending on the state of the CPU flags at
+             * the time the instruction is executed. The 18 instructions each
+             * test a different combination of flags for a conditional. If the
+             * condition is "true," then control is transferred to the target
+             * specified in the instruction. If the condition is "false," then
+             * control passes to the instruction that follows the conditional
+             * jump. All conditional jumps are SHORT, that is, the target must
+             * be in the current code segment and within -128 to +127 bytes of
+             * the first byte of the next instruction (JMP 00H jumps to the
+             * first byte of the next instruction). Since the jump is made by
+             * adding the relative displacement of the target to the instruction
+             * pointer, all conditional jumps are self-relative and are
+             * appropriate for position-independent routines.
+             */
+            /*
+             * JE/JZ
+             *
+             * Jump if equal/zero - ZF=1.
+             */
+            case 0x74: // JE/JZ SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (getFlag(ZF))
+                    ip += dst;
+                break;
+
+            /*
+             * JB/JNAE/JC
+             *
+             * Jump if below/not above or equal/carry - CF=1.
+             */
+            case 0x72: // JB/JNAE/JC SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (getFlag(CF))
+                    ip += dst;
+                break;
+
+            /*
+             * JBE/JNA
+             *
+             * Jump if below or equal/not above - (CF or ZF)=1.
+             */
+            case 0x76: // JBE/JNA SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (getFlag(CF) || getFlag(ZF))
+                    ip += dst;
+                break;
+
+            /*
+             * JS
+             *
+             * Jump if sign - SF=1.
+             */
+            case 0x78: // JS SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (getFlag(SF))
+                    ip += dst;
+                break;
+
+            /*
+             * JNE/JNZ
+             *
+             * Jump if not equal/not zero - ZF=0.
+             */
+            case 0x75: // JNE/JNZ SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (!getFlag(ZF))
+                    ip += dst;
+                break;
+
+            /*
+             * JNB/JAE
+             *
+             * Jump if not below/above or equal - CF=0.
+             */
+            case 0x73: // JNE/JNZ SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (!getFlag(CF))
+                    ip += dst;
+                break;
+
+            /*
+             * JNBE/JA
+             *
+             * Jump if not below nor equal/above - (CF or ZF)=0.
+             */
+            case 0x77: // JNBE/JA SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (!getFlag(CF) && !getFlag(ZF))
+                    ip += dst;
+                break;
+
+            /*
+             * JNS
+             *
+             * Jump if not sign - SF=0.
+             */
+            case 0x79: // JNS SHORT-LABEL
+                dst = getMem(ip++);
+                dst = signext(0b0, dst);
+                if (!getFlag(SF))
+                    ip += dst;
+                break;
+
+            /*
+             * Processor Control Instructions
+             *
+             * These instructions allow programs to control various CPU
+             * functions. One group of instructions updates flags, and another
+             * group is used primarily for synchronizing the 8086 with external
+             * events. A final instruction causes the CPU to do nothing. Except
+             * for the flag operations, none of the processor control
+             * instructions affect the flags.
+             */
+            /*
+             * Flag Operations
+             */
+            /*
+             * CLC
+             *
+             * CLC (Clear Carry flag) zeroes the carry flag (CF) and affects no
+             * other flags. It (and CMC and STC) is useful in conjunction with
+             * the RCL and RCR instructions.
+             */
+            case 0xf8:
+                setFlag(CF, false);
+                break;
+
+            /*
+             * STC
+             *
+             * STC (Set Carry flag) sets CF to 1 and affects no other flags.
+             */
+            case 0xf9:
+                setFlag(CF, true);
+                break;
+
+            /*
+             * External Synchronization
+             */
+            /*
+             * HLT
+             *
+             * HLT (Halt) causes the 8086 to enter the halt state. The processor
+             * leaves the halt state upon activation of the RESET line, upon
+             * receipt of a non-maskable interrupt request on NMI, or, if
+             * interrupts are enabled, upon receipt of a maskable interrupt
+             * request on INTR. HLT does not affect any flags. It may be used as
+             * an alternative to an endless software loop in situations where a
+             * program must wait for an interrupt.
+             */
+            case 0xf4: // HLT
+                return false;
+
+            /*
+             * No Operation
+             */
+            /*
+             * NOP
+             *
+             * NOP (No Operation) causes the CPU to do nothing. NOP does not
+             * affect any flags.
+             */
+            case 0x90: // NOP
+                break;
+
+            /*
+             * Extensions
+             */
+            /*
+             * GROUP 1
+             */
+            case 0x80:
+                // ADD REG8/MEM8,IMMED8
+                // OR REG8/MEM8,IMMED8
+                // ADC REG8/MEM8,IMMED8
+                // SBB REG8/MEM8,IMMED8
+                // AND REG8/MEM8,IMMED8
+                // SUB REG8/MEM8,IMMED8
+                // XOR REG8/MEM8,IMMED8
+                // CMP REG8/MEM8,IMMED8
+            case 0x81:
+                // ADD REG16/MEM16,IMMED16
+                // OR REG16/MEM16,IMMED16
+                // ADC REG16/MEM16,IMMED16
+                // SBB REG16/MEM16,IMMED16
+                // AND REG16/MEM16,IMMED16
+                // SUB REG16/MEM16,IMMED16
+                // XOR REG16/MEM16,IMMED16
+                // CMP REG16/MEM16,IMMED16
+            case 0x82:
+                // ADD REG8/MEM8,IMMED8
+                // ADC REG8/MEM8,IMMED8
+                // SBB REG8/MEM8,IMMED8
+                // SUB REG8/MEM8,IMMED8
+                // CMP REG8/MEM8,IMMED8
+            case 0x83:
+                // ADD REG16/MEM16,IMMED8
+                // ADC REG16/MEM16,IMMED8
+                // SBB REG16/MEM16,IMMED8
+                // SUB REG16/MEM16,IMMED8
+                // CMP REG16/MEM16,IMMED8
+                decode();
+                dst = getRM(w, mod, rm);
+                src = getMem(ip++);
+                if (queue[0] == 0x81)
+                    src |= getMem(ip++) << 8;
+                // Perform sign extension if needed.
+                else if (queue[0] == 0x83 && (src & 0x80) == 0x80)
+                    src |= 0xff00;
+                switch (reg) {
+                case 0b000: // ADD
+                    res = add(w, dst, src);
+                    setRM(w, mod, rm, res);
+                    break;
+                case 0b001: // OR
+                    if (queue[0] == 0x80 || queue[0] == 0x81) {
+                        res = dst | src;
+                        logic(w, res);
+                        setRM(w, mod, rm, res);
+                        break;
+                    }
+                    break;
+                case 0b010: // ADC
+                    res = adc(w, dst, src);
+                    setRM(w, mod, rm, res);
+                    break;
+                case 0b011: // SBB
+                    res = sbb(w, dst, src);
+                    setRM(w, mod, rm, res);
+                    break;
+                case 0b100: // AND
+                    if (queue[0] == 0x80 || queue[0] == 0x81) {
+                        res = dst & src;
+                        logic(w, res);
+                        setRM(w, mod, rm, res);
+                    }
+                    break;
+                case 0b101: // SUB
+                    res = sub(w, dst, src);
+                    setRM(w, mod, rm, res);
+                    break;
+                case 0b110: // XOR
+                    if (queue[0] == 0x80 || queue[0] == 0x81) {
+                        res = dst ^ src;
+                        logic(w, res);
+                        setRM(w, mod, rm, res);
+                    }
+                    break;
+                case 0b111: // CMP
+                    sub(w, dst, src);
+                    break;
+                }
+                break;
+
+            /*
+             * GROUP 1A
+             */
+            case 0x8f:
+                // POP REG16/MEM16
+                decode();
+                switch (reg) {
+                case 0b000: // POP
+                    src = pop();
+                    setRM(w, mod, rm, src);
+                    break;
+                }
+                break;
+
+            /*
+             * GROUP 2
+             */
+            case 0xd0:
+                // ROL REG8/MEM8,1
+                // ROR REG8/MEM8,1
+                // RCL REG8/MEM8,1
+                // RCR REG8/MEM8,1
+                // SAL/SHL REG8/MEM8,1
+                // SHR REG8/MEM8,1
+                // SAR REG8/MEM8,1
+            case 0xd1:
+                // ROL REG16/MEM16,1
+                // ROR REG16/MEM16,1
+                // RCL REG16/MEM16,1
+                // RCR REG16/MEM16,1
+                // SAL/SHL REG16/MEM16,1
+                // SHR REG16/MEM16,1
+                // SAR REG16/MEM16,1
+            case 0xd2:
+                // ROL REG8/MEM8,CL
+                // ROR REG8/MEM8,CL
+                // RCL REG8/MEM8,CL
+                // RCR REG8/MEM8,CL
+                // SAL/SHL REG8/MEM8,CL
+                // SHR REG8/MEM8,CL
+                // SAR REG8/MEM8,CL
+            case 0xd3:
+                // ROL REG16/MEM16,CL
+                // ROR REG16/MEM16,CL
+                // RCL REG16/MEM16,CL
+                // RCR REG16/MEM16,CL
+                // SAL/SHL REG16/MEM16,CL
+                // SHR REG16/MEM16,CL
+                // SAR REG16/MEM16,CL
+            {
+                decode();
+                dst = getRM(w, mod, rm);
+                src = queue[0] == 0xd0 || queue[0] == 0xd1 ? 1 : cl;
+                boolean tempCF;
+                switch (reg) {
+                case 0b000: // ROL
+                    for (int cnt = 0; cnt < src; ++cnt) {
+                        tempCF = msb(w, dst);
+                        dst <<= 1;
+                        dst |= tempCF ? 0b1 : 0b0;
+                        dst &= MASK[w];
+                    }
+                    setFlag(CF, (dst & 0b1) == 0b1);
+                    if (src == 1)
+                        setFlag(OF, msb(w, dst) ^ getFlag(CF));
+                    break;
+                case 0b001: // ROR
+                    for (int cnt = 0; cnt < src; ++cnt) {
+                        tempCF = (dst & 0b1) == 0b1;
+                        dst >>>= 1;
+                        dst |= (tempCF ? 1 : 0) * SIGN[w];
+                        dst &= MASK[w];
+                    }
+                    setFlag(CF, msb(w, dst));
+                    if (src == 1)
+                        setFlag(OF, msb(w, dst) ^ msb(w, dst << 1));
+                    break;
+                case 0b010: // RCL
+                    for (int cnt = 0; cnt < src; ++cnt) {
+                        tempCF = msb(w, dst);
+                        dst <<= 1;
+                        dst |= getFlag(CF) ? 0b1 : 0b0;
+                        dst &= MASK[w];
+                        setFlag(CF, tempCF);
+                    }
+                    if (src == 1)
+                        setFlag(OF, msb(w, dst) ^ getFlag(CF));
+                    break;
+                case 0b011: // RCR
+                    if (src == 1)
+                        setFlag(OF, msb(w, dst) ^ getFlag(CF));
+                    for (int cnt = 0; cnt < src; ++cnt) {
+                        tempCF = (dst & 0b1) == 0b1;
+                        dst >>>= 1;
+                        dst |= (getFlag(CF) ? 1 : 0) * SIGN[w];
+                        dst &= MASK[w];
+                        setFlag(CF, tempCF);
+                    }
+                    break;
+                case 0b100: // SAL/SHL
+                    for (int cnt = 0; cnt < src; ++cnt) {
+                        setFlag(CF, (dst & SIGN[w]) == SIGN[w]);
+                        dst <<= 1;
+                        dst &= MASK[w];
+                    }
+                    // Determine overflow.
+                    if (src == 1)
+                        setFlag(OF, (dst & SIGN[w]) == SIGN[w] ^ getFlag(CF));
+                    if (src > 0)
+                        setFlags(w, dst);
+                    break;
+                case 0b101: // SHR
+                    // Determine overflow.
+                    if (src == 1)
+                        setFlag(OF, (dst & SIGN[w]) == SIGN[w]);
+                    for (int cnt = 0; cnt < src; ++cnt) {
+                        setFlag(CF, (dst & 0b1) == 0b1);
+                        dst >>>= 1;
+                        dst &= MASK[w];
+                    }
+                    if (src > 0)
+                        setFlags(w, dst);
+                    break;
+                case 0b111: // SAR
+                    // Determine overflow.
+                    if (src == 1)
+                        setFlag(OF, false);
+                    for (int cnt = 0; cnt < src; ++cnt) {
+                        setFlag(CF, (dst & 0b1) == 0b1);
+                        dst = signext(w, dst);
+                        dst >>= 1;
+                        dst &= MASK[w];
+                    }
+                    if (src > 0)
+                        setFlags(w, dst);
+                    break;
+                }
+                setRM(w, mod, rm, dst);
+                break;
+            }
+
+            /*
+             * GROUP 3
+             */
+            case 0xf6:
+                // TEST REG8/MEM8
+                // NOT REG8/MEM8
+                // NEG REG8/MEM8
+                // MUL REG8/MEM8
+                // IMUL REG8/MEM8
+                // DIV REG8/MEM8
+                // IDIV REG8/MEM8
+            case 0xf7:
+                // TEST REG16/MEM16
+                // NOT REG16/MEM16
+                // NEG REG16/MEM16
+                // MUL REG16/MEM16
+                // IMUL REG16/MEM16
+                // DIV REG16/MEM16
+                // IDIV REG16/MEM16
+                decode();
+                src = getRM(w, mod, rm);
+                switch (reg) {
+                case 0b000: // TEST
+                    dst = getMem(ip++);
+                    if (w == 0b1)
+                        dst |= getMem(ip++) << 8;
+                    logic(w, dst & src);
+                    break;
+                case 0b010: // NOT
+                    setRM(w, mod, rm, ~src);
+                    break;
+                case 0b011: // NEG
+                    dst = sub(w, 0, src);
+                    setFlag(CF, dst > 0);
+                    setRM(w, mod, rm, dst);
+                    break;
+                case 0b100: // MUL
+                    if (w == 0b0) {
+                        dst = al;
+                        res = dst * src & 0xffff;
+                        al = res & 0xff;
+                        ah = res >>> 8 & 0xff;
+                        if (ah > 0) {
+                            setFlag(CF, true);
+                            setFlag(OF, true);
+                        } else {
+                            setFlag(CF, false);
+                            setFlag(OF, false);
+                        }
+                    } else {
+                        dst = ah << 8 | al;
+                        final long lres = (long) dst * (long) src & 0xffffffff;
+                        al = (int) (lres & 0xff);
+                        ah = (int) (lres >>> 8 & 0xff);
+                        dl = (int) (lres >>> 16 & 0xff);
+                        dh = (int) (lres >>> 24 & 0xff);
+                        if ((dh << 8 | dl) > 0) {
+                            setFlag(CF, true);
+                            setFlag(OF, true);
+                        } else {
+                            setFlag(CF, false);
+                            setFlag(OF, false);
+                        }
+                    }
+                    break;
+                case 0b101: // IMUL
+                    if (w == 0b0) {
+                        src = signext(0b0, src);
+                        dst = al;
+                        dst = signext(0b0, dst);
+                        res = dst * src & 0xffff;
+                        al = res & 0xff;
+                        ah = res >>> 8 & 0xff;
+                        if (ah > 0x00 && ah < 0xff) {
+                            setFlag(CF, true);
+                            setFlag(OF, true);
+                        } else {
+                            setFlag(CF, false);
+                            setFlag(OF, false);
+                        }
+                    } else {
+                        src = signext(0b1, src);
+                        dst = ah << 8 | al;
+                        dst = signext(0b1, dst);
+                        final long lres = (long) dst * (long) src & 0xffffffff;
+                        al = (int) (lres & 0xff);
+                        ah = (int) (lres >>> 8 & 0xff);
+                        dl = (int) (lres >>> 16 & 0xff);
+                        dh = (int) (lres >>> 24 & 0xff);
+                        if ((dh << 8 | dl) > 0x0000 && (dh << 8 | dl) < 0xffff) {
+                            setFlag(CF, true);
+                            setFlag(OF, true);
+                        } else {
+                            setFlag(CF, false);
+                            setFlag(OF, false);
+                        }
+                    }
+                    break;
+                case 0b110: // DIV
+                    if (src == 0)
+                        break; //TODO Generate a type 0 interrupt.
+                    if (w == 0b0) {
+                        dst = ah << 8 | al;
+                        res = dst / src & 0xffff;
+                        if (res > 0xff)
+                            break; //TODO Generate a type 0 interrupt.
+                        else {
+                            al = res & 0xff;
+                            ah = dst % src & 0xff;
+                        }
+                    } else {
+                        final long ldst = (long) (dh << 8 | dl) << 16 | ah << 8 | al;
+                        long lres = ldst / src & 0xffffffff;
+                        if (lres > 0xffff)
+                            break; //TODO Generate a type 0 interrupt.
+                        else {
+                            al = (int) (lres & 0xff);
+                            ah = (int) (lres >>> 8 & 0xff);
+                            lres = ldst % src & 0xffff;
+                            dl = (int) (lres & 0xff);
+                            dh = (int) (lres >>> 8 & 0xff);
+                        }
+                    }
+                    break;
+                case 0b111: // IDIV
+                    if (src == 0)
+                        break; //TODO Generate a type 0 interrupt.
+                    if (w == 0b0) {
+                        src = signext(0b0, src);
+                        dst = ah << 8 | al;
+                        dst = signext(0b1, dst);
+                        res = dst / src & 0xffff;
+                        if (res > 0x007f && res < 0xff81)
+                            break; //TODO Generate a type 0 interrupt.
+                        else {
+                            al = res & 0xff;
+                            ah = dst % src & 0xff;
+                        }
+                    } else {
+                        src = signext(0b1, src);
+                        long ldst = (long) (dh << 8 | dl) << 16 | ah << 8 | al;
+                        // Do sign extension manually.
+                        ldst = ldst << 32 >> 32;
+                        long lres = ldst / src & 0xffffffff;
+                        if (lres > 0x00007fff | lres < 0xffff8000)
+                            break; //TODO Generate a type 0 interrupt.
+                        else {
+                            al = (int) (lres & 0xff);
+                            ah = (int) (lres >>> 8 & 0xff);
+                            lres = ldst % src & 0xffff;
+                            dl = (int) (lres & 0xff);
+                            dh = (int) (lres >>> 8 & 0xff);
+                        }
+                    }
+                    break;
+                }
+                break;
+
+            /*
+             * GROUP 4
+             */
+            case 0xfe:
+                // INC REG8/MEM8
+                // DEC REG8/MEM8
+                decode();
+                src = getRM(w, mod, rm);
+                switch (reg) {
+                case 0b000: // INC
+                    res = inc(w, src);
+                    setRM(w, mod, rm, res);
+                    break;
+                case 0b001: // DEC
+                    res = dec(w, src);
                     setRM(w, mod, rm, res);
                     break;
                 }
                 break;
-            case 0b010: // ADC
-                res = adc(w, dst, src);
-                setRM(w, mod, rm, res);
-                break;
-            case 0b011: // SBB
-                res = sbb(w, dst, src);
-                setRM(w, mod, rm, res);
-                break;
-            case 0b100: // AND
-                if (queue[0] == 0x80 || queue[0] == 0x81) {
-                    res = dst & src;
-                    logic(w, res);
-                    setRM(w, mod, rm, res);
-                }
-                break;
-            case 0b101: // SUB
-                res = sub(w, dst, src);
-                setRM(w, mod, rm, res);
-                break;
-            case 0b110: // XOR
-                if (queue[0] == 0x80 || queue[0] == 0x81) {
-                    res = dst ^ src;
-                    logic(w, res);
-                    setRM(w, mod, rm, res);
-                }
-                break;
-            case 0b111: // CMP
-                sub(w, dst, src);
-                break;
-            }
-            break;
 
-        /*
-         * GROUP 1A
-         */
-        case 0x8f:
-            // POP REG16/MEM16
-            decode();
-            switch (reg) {
-            case 0b000: // POP
-                src = pop();
-                setRM(w, mod, rm, src);
+            /*
+             * GROUP 5
+             */
+            case 0xff:
+                // INC REG16/MEM16
+                // DEC REG16/MEM16
+                // CALL REG16/MEM16 (intra)
+                // CALL MEM16 (intersegment)
+                // JMP REG16/MEM16 (intra)
+                // JMP MEM16 (intersegment)
+                // PUSH REG16/MEM16
+                decode();
+                src = getRM(w, mod, rm);
+                switch (reg) {
+                case 0b000: // INC
+                    res = inc(w, src);
+                    setRM(w, mod, rm, res);
+                    break;
+                case 0b001: // DEC
+                    res = dec(w, src);
+                    setRM(w, mod, rm, res);
+                    break;
+                case 0b010: // CALL
+                    push(ip);
+                    ip = src;
+                    break;
+                case 0b011: // CALL
+                    push(cs);
+                    push(ip);
+                    dst = getEA(mod, rm);
+                    ip = memory[dst + 1] << 8 | memory[dst];
+                    cs = memory[dst + 3] << 8 | memory[dst + 2];
+                    break;
+                case 0b100: // JMP
+                    ip = src;
+                    break;
+                case 0b101: // JMP
+                    dst = getEA(mod, rm);
+                    ip = memory[dst + 1] << 8 | memory[dst];
+                    cs = memory[dst + 3] << 8 | memory[dst + 2];
+                    break;
+                case 0b110: // PUSH
+                    push(src);
+                    break;
+                }
                 break;
             }
-            break;
 
-        /*
-         * GROUP 2
-         */
-        case 0xd0:
-            // ROL REG8/MEM8,1
-            // ROR REG8/MEM8,1
-            // RCL REG8/MEM8,1
-            // RCR REG8/MEM8,1
-            // SAL/SHL REG8/MEM8,1
-            // SHR REG8/MEM8,1
-            // SAR REG8/MEM8,1
-        case 0xd1:
-            // ROL REG16/MEM16,1
-            // ROR REG16/MEM16,1
-            // RCL REG16/MEM16,1
-            // RCR REG16/MEM16,1
-            // SAL/SHL REG16/MEM16,1
-            // SHR REG16/MEM16,1
-            // SAR REG16/MEM16,1
-        case 0xd2:
-            // ROL REG8/MEM8,CL
-            // ROR REG8/MEM8,CL
-            // RCL REG8/MEM8,CL
-            // RCR REG8/MEM8,CL
-            // SAL/SHL REG8/MEM8,CL
-            // SHR REG8/MEM8,CL
-            // SAR REG8/MEM8,CL
-        case 0xd3:
-            // ROL REG16/MEM16,CL
-            // ROR REG16/MEM16,CL
-            // RCL REG16/MEM16,CL
-            // RCR REG16/MEM16,CL
-            // SAL/SHL REG16/MEM16,CL
-            // SHR REG16/MEM16,CL
-            // SAR REG16/MEM16,CL
-        {
-            decode();
-            dst = getRM(w, mod, rm);
-            src = queue[0] == 0xd0 || queue[1] == 0xd1 ? 1 : cl;
-            boolean tempCF;
-            switch (reg) {
-            case 0b000: // ROL
-                for (int cnt = 0; cnt < src; ++cnt) {
-                    tempCF = msb(w, dst);
-                    dst <<= 1;
-                    dst |= tempCF ? 0b1 : 0b0;
-                    dst &= MASK[w];
-                }
-                setFlag(CF, (dst & 0b1) == 0b1);
-                if (src == 1)
-                    setFlag(OF, msb(w, dst) ^ getFlag(CF));
-                break;
-            case 0b001: // ROR
-                for (int cnt = 0; cnt < src; ++cnt) {
-                    tempCF = (dst & 0b1) == 0b1;
-                    dst >>>= 1;
-                    dst |= (tempCF ? 1 : 0) * SIGN[w];
-                    dst &= MASK[w];
-                }
-                setFlag(CF, msb(w, dst));
-                if (src == 1)
-                    setFlag(OF, msb(w, dst) ^ msb(w, dst << 1));
-                break;
-            case 0b010: // RCL
-                for (int cnt = 0; cnt < src; ++cnt) {
-                    tempCF = msb(w, dst);
-                    dst <<= 1;
-                    dst |= getFlag(CF) ? 0b1 : 0b0;
-                    dst &= MASK[w];
-                    setFlag(CF, tempCF);
-                }
-                if (src == 1)
-                    setFlag(OF, msb(w, dst) ^ getFlag(CF));
-                break;
-            case 0b011: // RCR
-                if (src == 1)
-                    setFlag(OF, msb(w, dst) ^ getFlag(CF));
-                for (int cnt = 0; cnt < src; ++cnt) {
-                    tempCF = (dst & 0b1) == 0b1;
-                    dst >>>= 1;
-                    dst |= (tempCF ? 1 : 0) * SIGN[w];
-                    dst &= MASK[w];
-                    setFlag(CF, tempCF);
-                }
-                break;
-            case 0b100: // SAL/SHL
-                for (int cnt = 0; cnt < src; ++cnt) {
-                    setFlag(CF, (dst & SIGN[w]) == SIGN[w]);
-                    dst <<= 1;
-                    dst &= MASK[w];
-                }
-                // Determine overflow.
-                if (src == 1)
-                    setFlag(OF, (dst & SIGN[w]) == SIGN[w] ^ getFlag(CF));
-                setFlags(w, dst);
-                break;
-            case 0b101: // SHR
-                // Determine overflow.
-                if (src == 1)
-                    setFlag(OF, (dst & SIGN[w]) == SIGN[w]);
-                for (int cnt = 0; cnt < src; ++cnt) {
-                    setFlag(CF, (dst & 0b1) == 0b1);
-                    dst >>>= 1;
-                    dst &= MASK[w];
-                }
-                setFlags(w, dst);
-                break;
-            case 0b111: // SAR
-                // Determine overflow.
-                if (src == 1)
-                    setFlag(OF, false);
-                for (int cnt = 0; cnt < src; ++cnt) {
-                    setFlag(CF, (dst & 0b1) == 0b1);
-                    dst = signext(w, dst);
-                    dst >>= 1;
-                    dst &= MASK[w];
-                }
-                setFlags(w, dst);
-                break;
-            }
-            setRM(w, mod, rm, dst);
-            break;
-        }
-            
-        /*
-         * GROUP 3
-         */
-        case 0xf6:
-            // TEST REG8/MEM8
-            // NOT REG8/MEM8
-            // NEG REG8/MEM8
-            // MUL REG8/MEM8
-            // IMUL REG8/MEM8
-            // DIV REG8/MEM8
-            // IDIV REG8/MEM8
-        case 0xf7:
-            // TEST REG16/MEM16
-            // NOT REG16/MEM16
-            // NEG REG16/MEM16
-            // MUL REG16/MEM16
-            // IMUL REG16/MEM16
-            // DIV REG16/MEM16
-            // IDIV REG16/MEM16
-            decode();
-            src = getRM(w, mod, rm);
-            switch (reg) {
-            case 0b000: // TEST
-                dst = getMem(ip++);
+            if (rep > 0) {
+                int delta = 1;
+                if (getFlag(DF))
+                    delta *= -1;
                 if (w == 0b1)
-                    dst |= getMem(ip++) << 8;
-                logic(w, dst & src);
-                break;
-            case 0b010: // NOT
-                setRM(w, mod, rm, ~src);
-                break;
-            case 0b011: // NEG
-                dst = sub(w, 0, src);
-                setFlag(CF, dst > 0);
-                setRM(w, mod, rm, dst);
-                break;
-            case 0b100: // MUL
-                if (w == 0b0) {
-                    dst = al;
-                    res = dst * src & 0xffff;
-                    al = res & 0xff;
-                    ah = res >>> 8 & 0xff;
-                    if (ah > 0) {
-                        setFlag(CF, true);
-                        setFlag(OF, true);
-                    } else {
-                        setFlag(CF, false);
-                        setFlag(OF, false);
-                    }
-                } else {
-                    dst = ah << 8 | al;
-                    final long lres = (long) dst * (long) src & 0xffffffff;
-                    al = (int) (lres & 0xff);
-                    ah = (int) (lres >>> 8 & 0xff);
-                    dl = (int) (lres >>> 16 & 0xff);
-                    dh = (int) (lres >>> 24 & 0xff);
-                    if ((dh << 8 | dl) > 0) {
-                        setFlag(CF, true);
-                        setFlag(OF, true);
-                    } else {
-                        setFlag(CF, false);
-                        setFlag(OF, false);
-                    }
-                }
-                break;
-            case 0b101: // IMUL
-                if (w == 0b0) {
-                    src = signext(0b0, src);
-                    dst = al;
-                    dst = signext(0b0, dst);
-                    res = dst * src & 0xffff;
-                    al = res & 0xff;
-                    ah = res >>> 8 & 0xff;
-                    if (ah > 0x00 && ah < 0xff) {
-                        setFlag(CF, true);
-                        setFlag(OF, true);
-                    } else {
-                        setFlag(CF, false);
-                        setFlag(OF, false);
-                    }
-                } else {
-                    src = signext(0b1, src);
-                    dst = ah << 8 | al;
-                    dst = signext(0b1, dst);
-                    final long lres = (long) dst * (long) src & 0xffffffff;
-                    al = (int) (lres & 0xff);
-                    ah = (int) (lres >>> 8 & 0xff);
-                    dl = (int) (lres >>> 16 & 0xff);
-                    dh = (int) (lres >>> 24 & 0xff);
-                    if ((dh << 8 | dl) > 0x0000 && (dh << 8 | dl) < 0xffff) {
-                        setFlag(CF, true);
-                        setFlag(OF, true);
-                    } else {
-                        setFlag(CF, false);
-                        setFlag(OF, false);
-                    }
-                }
-                break;
-            case 0b110: // DIV
-                if (src == 0)
-                    break; //TODO Generate a type 0 interrupt.
-                if (w == 0b0) {
-                    dst = ah << 8 | al;
-                    res = dst / src & 0xffff;
-                    if (res > 0xff)
-                        break; //TODO Generate a type 0 interrupt.
-                    else {
-                        al = res & 0xff;
-                        ah = dst % src & 0xff;
-                    }
-                } else {
-                    final long ldst = (long) (dh << 8 | dl) << 16 | ah << 8 | al;
-                    long lres = ldst / src & 0xffffffff;
-                    if (lres > 0xffff)
-                        break; //TODO Generate a type 0 interrupt.
-                    else {
-                        al = (int) (lres & 0xff);
-                        ah = (int) (lres >>> 8 & 0xff);
-                        lres = ldst % src & 0xffff;
-                        dl = (int) (lres & 0xff);
-                        dh = (int) (lres >>> 8 & 0xff);
-                    }
-                }
-                break;
-            case 0b111: // IDIV
-                if (src == 0)
-                    break; //TODO Generate a type 0 interrupt.
-                if (w == 0b0) {
-                    src = signext(0b0, src);
-                    dst = ah << 8 | al;
-                    dst = signext(0b1, dst);
-                    res = dst / src & 0xffff;
-                    if (res > 0x007f && res < 0xff81)
-                        break; //TODO Generate a type 0 interrupt.
-                    else {
-                        al = res & 0xff;
-                        ah = dst % src & 0xff;
-                    }
-                } else {
-                    src = signext(0b1, src);
-                    long ldst = (long) (dh << 8 | dl) << 16 | ah << 8 | al;
-                    // Do sign extension manually.
-                    ldst = ldst << 32 >> 32;
-                    long lres = ldst / src & 0xffffffff;
-                    if (lres > 0x00007fff | lres < 0xffff8000)
-                        break; //TODO Generate a type 0 interrupt.
-                    else {
-                        al = (int) (lres & 0xff);
-                        ah = (int) (lres >>> 8 & 0xff);
-                        lres = ldst % src & 0xffff;
-                        dl = (int) (lres & 0xff);
-                        dh = (int) (lres >>> 8 & 0xff);
-                    }
-                }
-                break;
+                    delta *= 2;
+                si += delta;
+                di += delta;
             }
-            break;
-
-        /*
-         * GROUP 4
-         */
-        case 0xfe:
-            // INC REG8/MEM8
-            // DEC REG8/MEM8
-            decode();
-            src = getRM(w, mod, rm);
-            switch (reg) {
-            case 0b000: // INC
-                res = inc(w, src);
-                setRM(w, mod, rm, res);
-                break;
-            case 0b001: // DEC
-                res = dec(w, src);
-                setRM(w, mod, rm, res);
-                break;
-            }
-            break;
-
-        /*
-         * GROUP 5
-         */
-        case 0xff:
-            // INC REG16/MEM16
-            // DEC REG16/MEM16
-            // CALL REG16/MEM16 (intra)
-            // CALL MEM16 (intersegment)
-            // JMP REG16/MEM16 (intra)
-            // JMP MEM16 (intersegment)
-            // PUSH REG16/MEM16
-            decode();
-            src = getRM(w, mod, rm);
-            switch (reg) {
-            case 0b000: // INC
-                res = inc(w, src);
-                setRM(w, mod, rm, res);
-                break;
-            case 0b001: // DEC
-                res = dec(w, src);
-                setRM(w, mod, rm, res);
-                break;
-            case 0b010: // CALL
-                push(ip);
-                ip = src;
-                break;
-            case 0b011: // CALL
-                push(cs);
-                push(ip);
-                dst = getEA(mod, rm);
-                ip = memory[dst + 1] << 8 | memory[dst];
-                cs = memory[dst + 3] << 8 | memory[dst + 2];
-                break;
-            case 0b100: // JMP
-                ip = src;
-                break;
-            case 0b101: // JMP
-                dst = getEA(mod, rm);
-                ip = memory[dst + 1] << 8 | memory[dst];
-                cs = memory[dst + 3] << 8 | memory[dst + 2];
-                break;
-            case 0b110: // PUSH
-                push(src);
-                break;
-            }
-            break;
-        }
+        } while (rep > 0);
         return true;
     }
 
@@ -2757,9 +3048,9 @@ public class Intel8086 {
      * @param dst
      *            the operand
      * @return the result
-     */ 
+     */
     private int dec(final int w, final int dst) {
-        final int res = (dst - 1) & MASK[w];
+        final int res = dst - 1 & MASK[w];
 
         setFlag(AF, ((res ^ dst ^ 1) & AF) > 0);
         setFlag(OF, res == SIGN[w] - 1);
@@ -3277,7 +3568,7 @@ public class Intel8086 {
      *            the new value
      */
     private void setMem(final int seg, final int addr, final int val) {
-        memory[seg << 4 | addr] = val;
+        memory[(seg << 4 | addr) & 0xfffff] = val;
     }
 
     /**
