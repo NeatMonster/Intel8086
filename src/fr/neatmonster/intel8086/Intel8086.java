@@ -64,7 +64,7 @@ public class Intel8086 {
             // Load instructions.
             cpu.load(bin);
             // Execute all instructions.
-            cpu.execute();
+            cpu.run();
         } catch (final IOException e) {
             e.printStackTrace();
         }
@@ -98,7 +98,7 @@ public class Intel8086 {
     }
 
     /**
-     * Extends the sign of a value.
+     * Converts an unsigned value to a signed value.
      *
      * @param w
      *            word/byte operation
@@ -106,7 +106,7 @@ public class Intel8086 {
      *            the value
      * @return the new value
      */
-    private static int signext(final int w, final int x) {
+    private static int signconv(final int w, final int x) {
         return x << 32 - BITS[w] >> 32 - BITS[w];
     }
 
@@ -209,6 +209,20 @@ public class Intel8086 {
      * performing unsigned arithmetic.
      */
     private static final int   OF     = 1 << 11;
+
+    /** Instruction operates on byte data. */
+    private static final int   B      = 0b0;
+    /** Instruction operates on word data. */
+    private static final int   W      = 0b1;
+
+    /** Register AX is one of the instruction operands. */
+    private static final int   AX     = 0b000;
+    /** Register CX is one of the instruction operands. */
+    private static final int   CX     = 0b001;
+    /** Register DX is one of the instruction operands. */
+    private static final int   DX     = 0b010;
+    /** Register BX is one of the instruction operands. */
+    private static final int   BX     = 0b011;
 
     /** Lookup table used for clipping results. */
     private static final int[] MASK   = new int[] { 0xff, 0xffff };
@@ -651,15 +665,715 @@ public class Intel8086 {
     }
 
     /**
-     * Executes one cycle: fetch and execute.
+     * Decrements an operand and sets flags accordingly.
      *
-     * @return has more instructions?
+     * @param w
+     *            word/byte operation
+     * @param dst
+     *            the operand
+     * @return the result
      */
-    private boolean cycle() {
+    private int dec(final int w, final int dst) {
+        final int res = dst - 1 & MASK[w];
+
+        setFlag(AF, ((res ^ dst ^ 1) & AF) > 0);
+        setFlag(OF, res == SIGN[w] - 1);
+        setFlags(w, res);
+
+        return res;
+    }
+
+    /**
+     * Decodes the second byte of the instruction and increments IP accordingly.
+     */
+    private void decode() {
+        mod = queue[1] >>> 6 & 0b11;
+        reg = queue[1] >>> 3 & 0b111;
+        rm  = queue[1]       & 0b111;
+
+        if (mod == 0b01)
+            // 8-bit displacement follows
+            ip += 2;
+        else if (mod == 0b00 && rm == 0b110 || mod == 0b10)
+            // 16-bit displacement follows
+            ip += 3;
+        else
+            // No displacement
+            ip += 1;
+    }
+
+    /**
+     * Gets the absolute address from a segment and an offset.
+     *
+     * @param seg
+     *            the segment
+     * @param off
+     *            the offset
+     * @return the value
+     */
+    private int getAddr(final int seg, final int off) {
+        return seg << 4 | off;
+    }
+
+    /**
+     * Gets the effective address of the operand.
+     *
+     * The Effective Address
+     *
+     * The offset that the EU calculates for a memory operands is called the
+     * operand's effective address or EA. It is an unsigned 16-bit number that
+     * expresses the operand's distance in bytes from the beginning of the
+     * segment in which it resides. The EU can calculate the effective address
+     * in different ways. Information encoded in the second byte of the
+     * instruction tells the EU how to calculate the operand. A compiler or
+     * assembler derives this information from the statement or instruction
+     * written by the programmer. Assembly language programmers have access to
+     * all addressing modes.
+     *
+     * The execution unit calculate the EA by summing a displacement, the
+     * content of a base register and the content of an index register. The
+     * fact that any combination of these three given components may be present
+     * in a given instruction gives rise to the variety of 8086 memory
+     * addressing modes.
+     *
+     * The displacement element is a 8- or 16-bit number that is contained in
+     * the instruction. The displacement generally is derived from the position
+     * of the operand name (a variable or label) in the program. It also is
+     * possible for a programmer to modify this value or to specify the
+     * displacement explicitly.
+     *
+     * A programmer may specify that either BX or BP is to serve as a base
+     * register whose content is to be used in the EA computation. Similarly,
+     * either SI or DI may be specified as in index register. Whereas the
+     * displacement value is a constant, the contents of the base and index
+     * registers may change during execution. This makes it possible for one
+     * instruction to access different memory locations as determined by the
+     * current values in the base and/or index registers.
+     *
+     * It takes time for the EU to calculate a memory operand's effective
+     * address. In general, the more elements in the calculation, the longer it
+     * takes.
+     *
+     * Direct Addressing
+     *
+     * Direct addressing is the simplest memory addressing mode. No registers
+     * are involved; the EA is take directly from the displacement field of the
+     * instruction. Direct addressing typically is used to access simple
+     * variables (scalars).
+     *
+     * Register Indirect Addressing
+     *
+     * The effective address of a memory operand may be taken directly from one
+     * of the base or index register. One instruction can operate on many
+     * different memory locations if the value in the base or index register is
+     * updated appropriately. The LEA (load effective address) and arithmetic
+     * instructions might be used to change the register value.
+     *
+     * Note that any 16-bit general register may be used for register indirect
+     * addressing with the JMP or CALL instructions.
+     *
+     * Based Addressing
+     *
+     * In based addressing, the effective address is the sum of displacement
+     * value and the content of register BX or register BP. Recall that
+     * specifying BP as a base register directs the BIU to obtain the operand
+     * from the current stack segment (unless a segment override prefix is
+     * present). This makes based addressing with BP a very convenient way to
+     * access stack data.
+     *
+     * Based addressing also provides a straightforward way to address
+     * structures which may be located at different places in memory. A base
+     * register can be pointed at the base of the structure and elements of the
+     * structure addressed by their displacement from the base. Different
+     * copies of the same structure can be accessed by simply changing the base
+     * register.
+     *
+     * Indexed Addressing
+     *
+     * In indexed addressing, the effective address is calculated from the sum
+     * of a displacement plus the content of an index register (SI or DI).
+     * Indexed addressing often is used to access elements in an array. The
+     * displacement locates the beginning of the array, and the value of the
+     * index register selects one element (the first element is selected if the
+     * index register contains 0). Since all array elements are the same
+     * length, simple arithmetic on the index register will select any element.
+     *
+     * Based Indexed Addressing
+     *
+     * Based indexed addressing generates an effective address that is the sum
+     * of a base register, an index register and a displacement. Based indexed
+     * addressing is a very flexible ode because two address components can be
+     * varied at execution time.
+     *
+     * Based indexed addressing provides a convenient way for a procedure to
+     * address an array allocated on a stack. Register BP can contain the
+     * offset of a reference point on the stack, typically the top of the stack
+     * after the procedure has saved registers and allocated local storage. The
+     * offset of the beginning of the array from the reference point can be
+     * expressed by a displacement value, and an index register can be used to
+     * access individual array elements.
+     *
+     * Arrays contained in structures and matrices (two-dimension arrays) also
+     * could be accessed with base indexed addressing.
+     *
+     * String Addressing
+     *
+     * String instructions do not use the normal memory addressing modes to
+     * access their operands. Instead, the index registers are used implicitly.
+     * When a string instruction is executed, SI is assumed to point to the
+     * first byte or word of the source string, and DI is assumed to point to
+     * the first byte or word of the destination string. In a repeated string
+     * operation, the CPU automatically adjusts SI and DI to obtain subsequent
+     * bytes or words.
+     *
+     * I/O Port Addressing
+     *
+     * If an I/O port is memory mapped, any of the memory operand addressing
+     * modes may be used to access the port. For example, a group of terminals
+     * can be accessed as an "array". String instructions also can be used to
+     * transfer data to memory-mapped ports with an appropriate hardware
+     * interface.
+     *
+     * Two different addressing modes can be used to access ports located in
+     * the I/O space. In direct port accessing, the port number is an 8-bit
+     * immediate operand. This allows fixed access to ports numbered 0-255.
+     * Indirect port addressing is similar to register indirect addressing of
+     * memory operands. The port number is taken from register DX and can range
+     * from 0 to 65,535. By previously adjusting the content of register DX,
+     * one instruction can access any port in the I/O space. A group of
+     * adjacent ports can be accessed using a simple software loop that adjusts
+     * the value in DX.
+     *
+     * @param mod
+     *            the mode field
+     * @param rm
+     *            the register/memory field
+     * @return the effective address
+     */
+    private int getEA(final int mod, final int rm) {
+        int disp = 0;
+        if (mod == 0b01)
+            // 8-bit displacement follows
+            disp = queue[2];
+        else if (mod == 0b10)
+            // 16-bit displacement follows
+            disp = queue[3] << 8 | queue[2];
+
+        int ea = 0;
+        switch (rm) {
+        case 0b000: // EA = (BX) + (SI) + DISP
+            ea = bh << 8 | bl + si + disp;
+            break;
+        case 0b001: // EA = (BX) + (DI) + DISP
+            ea = bh << 8 | bl + di + disp;
+            break;
+        case 0b010: // EA = (BP) + (SI) + DISP
+            ea = bp + si + disp;
+            break;
+        case 0b011: // EA = (BP) + (DI) + DISP
+            ea = bp + di + disp;
+            break;
+        case 0b100: // EA = (SI) + DISP
+            ea = si + disp;
+            break;
+        case 0b101: // EA = (DI) + DISP
+            ea = di + disp;
+            break;
+        case 0b110:
+            if (mod == 0b00) {
+                // Direct address
+                ea = queue[3] << 8 | queue[2];
+            } else
+                // EA = (BP) + DISP
+                ea = bp + disp;
+            break;
+        case 0b111: // EA = (BX) + DISP
+            ea = bh << 8 | bl + disp;
+            break;
+        }
+        return os << 4 | ea & 0xffff;
+    }
+
+    /**
+     * Gets the state of a flag.
+     *
+     * @param flag
+     *            the flag to check
+     * @return true if set, false if cleared
+     */
+    private boolean getFlag(final int flag) {
+        return (flags & flag) > 0;
+    }
+
+    /**
+     * Gets the value pointed by the instruction pointer.
+     *
+     * @param w
+     *            word/byte operation
+     * @return the value
+     */
+    private int getMem(final int w) {
+        final int addr = getAddr(cs, ip);
+        ip += 1 + w;
+        return getMem(w, addr);
+    }
+
+    /**
+     * Gets the value at the specified address.
+     *
+     * @param w
+     *            word/byte operation
+     * @param addr
+     *            the address
+     * @return the value
+     */
+    private int getMem(final int w, final int addr) {
+        int val = memory[addr];
+        if (w == W)
+            val |= memory[addr + 1] << 8;
+        return val;
+    }
+
+    /**
+     * Gets the value of the register.
+     *
+     * The REG (register) field identifies a register that is one of the
+     * instruction operands.
+     *
+     * @param w
+     *            word/byte operation
+     * @param reg
+     *            the register field
+     * @return the value
+     */
+    private int getReg(final int w, final int reg) {
+        if (w == B)
+            // Byte data
+            switch (reg) {
+            case 0b000: // AL
+                return al;
+            case 0b001: // CL
+                return cl;
+            case 0b010: // DL
+                return dl;
+            case 0b011: // BL
+                return bl;
+            case 0b100: // AH
+                return ah;
+            case 0b101: // CH
+                return ch;
+            case 0b110: // DH
+                return dh;
+            case 0b111: // BH
+                return bh;
+            }
+        else
+            // Word data
+            switch (reg) {
+            case 0b000: // AX
+                return ah << 8 | al;
+            case 0b001: // CX
+                return ch << 8 | cl;
+            case 0b010: // DX
+                return dh << 8 | dl;
+            case 0b011: // BX
+                return bh << 8 | bl;
+            case 0b100: // SP
+                return sp;
+            case 0b101: // BP
+                return bp;
+            case 0b110: // SI
+                return si;
+            case 0b111: // DI
+                return di;
+            }
+        return 0;
+    }
+
+    /**
+     * Gets the value of the register/memory.
+     *
+     * The MOD (mode) field indicates whether one of the operands is in memory
+     * or whether both operands are registers. The encoding of the R/M
+     * (register/memory) field depends on how the mode field is set.
+     *
+     * If MOD = 11 (register-to-register mode), then R/M identifies the second
+     * register operand.
+     * If MOD selects memory mode, then R/M indicates how the effective address
+     * of the memory operand is to be calculated.
+     *
+     * @param w
+     *            word/byte instruction
+     * @param mod
+     *            the mode field
+     * @param rm
+     *            the register/memory field
+     * @return the value
+     */
+    private int getRM(final int w, final int mod, final int rm) {
+        if (mod == 0b11)
+            // Register-to-register mode
+            return getReg(w, rm);
+        else
+            // Memory mode
+            return getMem(w, getEA(mod, rm));
+    }
+
+    /**
+     * Gets the value of the segment register.
+     *
+     * The REG (register) field identifies a register that is one of the
+     * instruction operands.
+     *
+     * @param reg
+     *            the register field
+     * @return the value
+     */
+    private int getSegReg(final int reg) {
+        switch (reg) {
+        case 0b00: // ES
+            return es;
+        case 0b01: // CS
+            return cs;
+        case 0b10: // SS
+            return ss;
+        case 0b11: // DS
+            return ds;
+        }
+        return 0;
+    }
+
+    /**
+     * Increments an operand and sets flags accordingly.
+     *
+     * @param w
+     *            word/byte operation
+     * @param dst
+     *            the operand
+     * @return the result
+     */
+    private int inc(final int w, final int dst) {
+        final int res = dst + 1 & MASK[w];
+
+        setFlag(AF, ((res ^ dst ^ 1) & AF) > 0);
+        setFlag(OF, res == SIGN[w]);
+        setFlags(w, res);
+
+        return res;
+    }
+
+    /**
+     * Loads a binary file into memory at the specified address.
+     *
+     * @param bin
+     *            the binary file
+     */
+    public void load(final int[] bin) {
+        for (int i = 0; i < bin.length; i++)
+            memory[i] = bin[i] & 0xff;
+    }
+
+    /**
+     * Sets flags according to the result of a logical operation.
+     *
+     * @param w
+     *            word/byte operation
+     * @param res
+     *            the result
+     */
+    private void logic(final int w, final int res) {
+        setFlag(CF, false);
+        setFlag(OF, false);
+        setFlags(w, res);
+    }
+
+    /**
+     * Pops a value at the top of the stack.
+     *
+     * @return the value
+     */
+    private int pop() {
+        final int val = getMem(W, getAddr(ss, sp));
+        sp += 2;
+        return val;
+    }
+
+    /**
+     * Pushes a value to the top of the stack.
+     *
+     * @param val
+     *            the value
+     */
+    private void push(final int val) {
+        sp -= 2;
+        setMem(W, getAddr(ss, sp), val);
+    }
+
+    /**
+     * Resets the CPU to its default state.
+     */
+    public void reset() {
+        flags = 0;
+        ip = 0x0000;
+        sp = 0x0100;
+        //cs = 0xffff;
+        ds = 0x0000;
+        ss = 0x0000;
+        es = 0x0000;
+        for (int i = 0; i < 6; i++)
+            queue[i] = 0;
+    }
+
+    /**
+     * Execute all instructions.
+     */
+    public void run() {
+        while (tick()) {
+            //TODO Replace by the real text mode.
+            for (int y = 0; y < 25; y++)
+                for (int x = 0; x < 80; x++) {
+                    final char c = (char) memory[0x8000 + y * 80 + x];
+                    System.out.print(c == 0 ? " " : c);
+                    if (x == 79)
+                        System.out.println("");
+                }
+        }
+    }
+
+    /**
+     * Performs subtraction with borrow and sets flags accordingly.
+     *
+     * @param w
+     *            word/byte operation
+     * @param dst
+     *            the first operand
+     * @param src
+     *            the second operand
+     * @return the result
+     */
+    private int sbb(final int w, final int dst, final int src) {
+        final int carry = (flags & CF) == CF ? 1 : 0;
+        final int res = dst - src - carry & MASK[w];
+
+        setFlag(CF, carry > 0 ? dst <= src : dst < src);
+        setFlag(AF, ((res ^ dst ^ src) & AF) > 0);
+        setFlag(OF, (shift((dst ^ src) & (dst ^ res), 12 - BITS[w]) & OF) > 0);
+        setFlags(w, res);
+
+        return res;
+    }
+
+    /**
+     * Sets or clears a flag.
+     *
+     * @param flag
+     *            the flag to affect
+     * @param set
+     *            true to set, false to clear
+     */
+    private void setFlag(final int flag, final boolean set) {
+        if (set)
+            flags |= flag;
+        else
+            flags &= ~flag;
+    }
+
+    /**
+     * Sets the parity, zero and sign flags.
+     *
+     * @param w
+     *            word/byte operation
+     * @param res
+     *            the result
+     */
+    private void setFlags(final int w, final int res) {
+        setFlag(PF, PARITY[res & 0xff] > 0);
+        setFlag(ZF, res == 0);
+        setFlag(SF, (shift(res, 8 - BITS[w]) & SF) > 0);
+    }
+
+    /**
+     * Sets the value at the specified address.
+     *
+     * @param w
+     *            word/byte operation
+     * @param addr
+     *            the address
+     * @param val
+     *            the new value
+     */
+    private void setMem(final int w, final int addr, final int val) {
+        memory[addr] = val & 0xff;
+        if (w == W)
+            memory[addr + 1] = val >>> 8 & 0xff;
+    }
+
+    /**
+     * Sets the value of the register.
+     *
+     * The REG (register) field identifies a register that is one of the
+     * instruction operands.
+     *
+     * @param w
+     *            word/byte operation
+     * @param reg
+     *            the register field
+     * @param val
+     *            the new value
+     */
+    private void setReg(final int w, final int reg, final int val) {
+        if (w == B)
+            // Byte data
+            switch (reg) {
+            case 0b000: // AL
+                al = val & 0xff;
+                break;
+            case 0b001: // CL
+                cl = val & 0xff;
+                break;
+            case 0b010: // DL
+                dl = val & 0xff;
+                break;
+            case 0b011: // BL
+                bl = val & 0xff;
+                break;
+            case 0b100: // AH
+                ah = val & 0xff;
+                break;
+            case 0b101: // CH
+                ch = val & 0xff;
+                break;
+            case 0b110: // DH
+                dh = val & 0xff;
+                break;
+            case 0b111: // BH
+                bh = val & 0xff;
+                break;
+            }
+        else
+            // Word data
+            switch (reg) {
+            case 0b000: // AX
+                al = val & 0xff;
+                ah = val >>> 8 & 0xff;
+                break;
+            case 0b001: // CX
+                cl = val & 0xff;
+                ch = val >>> 8 & 0xff;
+                break;
+            case 0b010: // DX
+                dl = val & 0xff;
+                dh = val >>> 8 & 0xff;
+                break;
+            case 0b011: // BX
+                bl = val & 0xff;
+                bh = val >>> 8 & 0xff;
+                break;
+            case 0b100: // SP
+                sp = val & 0xffff;
+                break;
+            case 0b101: // BP
+                bp = val & 0xffff;
+                break;
+            case 0b110: // SI
+                si = val & 0xffff;
+                break;
+            case 0b111: // DI
+                di = val & 0xffff;
+                break;
+            }
+    }
+
+    /**
+     * Sets the value of the register/memory.
+     *
+     * The MOD (mode) field indicates whether one of the operands is in memory
+     * or whether both operands are registers. The encoding of the R/M
+     * (register/memory) field depends on how the mode field is set.
+     *
+     * If MOD = 11 (register-to-register mode), then R/M identifies the second
+     * register operand.
+     * If MOD selects memory mode, then R/M indicates how the effective address
+     * of the memory operand is to be calculated.
+     *
+     * @param w
+     *            word/byte instruction
+     * @param mod
+     *            the mode field
+     * @param rm
+     *            the register/memory field
+     * @param val
+     *            the new value
+     */
+    private void setRM(final int w, final int mod, final int rm, final int val) {
+        if (mod == 0b11)
+            // Register-to-register mode
+            setReg(w, rm, val);
+        else
+            // Memory mode
+            setMem(w, getEA(mod, rm), val);
+    }
+
+    /**
+     * Sets the value of the segment register.
+     *
+     * The REG (register) field identifies a register that is one of the
+     * instruction operands.
+     *
+     * @param reg
+     *            the register field
+     * @param val
+     *            the new value
+     */
+    private void setSegReg(final int reg, final int val) {
+        switch (reg) {
+        case 0b00: // ES
+            es = val & 0xffff;
+            break;
+        case 0b01: // CS
+            cs = val & 0xffff;
+            break;
+        case 0b10: // SS
+            ss = val & 0xffff;
+            break;
+        case 0b11: // DS
+            ds = val & 0xffff;
+            break;
+        }
+    }
+
+    /**
+     * Performs subtraction and sets flags accordingly.
+     *
+     * @param w
+     *            word/byte operation
+     * @param dst
+     *            the first operand
+     * @param src
+     *            the second operand
+     * @return the result
+     */
+    private int sub(final int w, final int dst, final int src) {
+        final int res = dst - src & MASK[w];
+
+        setFlag(CF, dst < src);
+        setFlag(AF, ((res ^ dst ^ src) & AF) > 0);
+        setFlag(OF, (shift((dst ^ src) & (dst ^ res), 12 - BITS[w]) & OF) > 0);
+        setFlags(w, res);
+
+        return res;
+    }
+
+    /**
+     * Fetches and executes an instruction.
+     *
+     * @return true if instructions remain, false otherwise
+     */
+    private boolean tick() {
         int rep = 0;
         prefixes: while (true) {
             // Segment prefix check.
-            switch (getMem(ip++)) {
+            switch (getMem(B)) {
             case 0x26: // ES: (segment override prefix)
                 os = es;
                 break;
@@ -672,7 +1386,7 @@ public class Intel8086 {
             case 0x3e: // DS: (segment override prefix)
                 os = ds;
                 break;
-            // Repetition prefix check.
+            // Repeat prefix check.
             case 0xf2: // REPNE/REPNZ
                 rep = 2;
                 break;
@@ -681,41 +1395,40 @@ public class Intel8086 {
                 break;
             default:
                 os = ds;
-                ip--;
+                --ip;
                 break prefixes;
             }
         }
 
         // Fetch instruction from memory.
         for (int i = 0; i < 6; ++i)
-            queue[i] = getMem(ip + i);
+            queue[i] = getMem(B, getAddr(cs, ip + i));
 
         // Decode first byte.
-        op = queue[0] >>> 2 & 0b111111;
-        d  = queue[0] >>> 1 & 0b1;
-        w  = queue[0]       & 0b1;
-        ++ip; // Don't forget to inc. IP.
+        op = queue[0];
+        d  = op >>> 1 & 0b1;
+        w  = op       & 0b1;
+        ++ip; // Increment IP.
 
         // Only repeat string instructions.
-        if (rep > 0 && (queue[0] < 0xa4 || queue[0] > 0xaf
-                     || queue[0] > 0xa7 && queue[0] < 0xaa))
+        if (rep > 0 && (op < 0xa4 || op > 0xaf || op > 0xa7 && op < 0xaa))
             rep = 0;
 
         do {
+            // Repeat prefix present.
             if (rep > 0) {
-                int cx = ch << 8 | cl;
+                final int cx = getReg(W, CX);
 
                 // Reached EOS.
                 if (cx == 0)
                     break;
 
-                --cx;
-                cl = cx & 0xff;
-                ch = cx >> 8 & 0xff;
+                // Decrement CX.
+                setReg(W, CX, cx - 1);
             }
 
             int dst, src, res = 0;
-            switch (queue[0]) {
+            switch (op) {
             /*
              * Data Transfer Instructions
              *
@@ -737,15 +1450,16 @@ public class Intel8086 {
             // Register/Memory to/from Register
             case 0x88: // MOV REG8/MEM8,REG8
             case 0x89: // MOV REG16/MEM16,REG16
-                decode();
-                src = getReg(w, reg);
-                setRM(w, mod, rm, src);
-                break;
             case 0x8a: // MOV REG8,REG8/MEM8
             case 0x8b: // MOV REG16,REG16/MEM16
                 decode();
-                src = getRM(w, mod, rm);
-                setReg(w, reg, src);
+                if (d == 0b0) {
+                    src = getReg(w, reg);
+                    setRM(w, mod, rm, src);
+                } else {
+                    src = getRM(w, mod, rm);
+                    setReg(w, reg, src);
+                }
                 break;
 
             // Immediate to Register/Memory
@@ -754,9 +1468,7 @@ public class Intel8086 {
                 decode();
                 switch (reg) {
                 case 0b000:
-                    src = getMem(ip++);
-                    if (w == 0b1)
-                        src |= getMem(ip++) << 8;
+                    src = getMem(w);
                     setRM(w, mod, rm, src);
                 }
                 break;
@@ -778,48 +1490,38 @@ public class Intel8086 {
             case 0xbd: // MOV BP,IMMED16
             case 0xbe: // MOV SI,IMMED16
             case 0xbf: // MOV DI,IMMED16
-                w = queue[0] >>> 3 & 0b1;
-                reg = queue[0] & 0b111;
-                src = getMem(ip++);
-                if (w == 0b1)
-                    src |= getMem(ip++) << 8;
+                w   = op >>> 3 & 0b1;
+                reg = op       & 0b111;
+                src = getMem(w);
                 setReg(w, reg, src);
                 break;
 
-            // Memory to Accumulator
+            // Memory to/from Accumulator
             case 0xa0: // MOV AL,MEM8
             case 0xa1: // MOV AX,MEM16
-                dst = getMem(ip++);
-                dst |= getMem(ip++) << 8;
-                src = getMem(os, dst);
-                if (w == 0b1)
-                    src |= getMem(os, dst + 1) << 8;
-                setReg(w, 0b000, src);
-                break;
-
-            // Accumulator to Memory
             case 0xa2: // MOV MEM8,AL
             case 0xa3: // MOV MEM16,AX
-                dst = getMem(ip++);
-                dst |= getMem(ip++) << 8;
-                src = getReg(w, 0b000);
-                setMem(os, dst, src & 0xff);
-                if (w == 0b1)
-                    setMem(os, dst + 1, src >>> 8 & 0xff);
+                dst = getMem(W);
+                if (d == 0b0) {
+                    src = getMem(w, getAddr(os, dst));
+                    setReg(w, AX, src);
+                } else {
+                    src = getReg(w, AX);
+                    setMem(w, getAddr(os, dst), src);
+                }
                 break;
 
-            // Register/Memory to Segment Register
+            // Register/Memory to/from Segment Register
             case 0x8e: // MOV SEGREG,REG16/MEM16
-                decode();
-                src = getRM(0b1, mod, rm);
-                setSegReg(reg, src);
-                break;
-
-            // Segment Register to Register/Memory
             case 0x8c: // MOV REG16/MEM16,SEGREG
                 decode();
-                src = getSegReg(reg);
-                setRM(0b1, mod, rm, src);
+                if (d == 0b0) {
+                    src = getRM(W, mod, rm);
+                    setSegReg(reg, src);
+                } else {
+                    src = getSegReg(reg);
+                    setRM(W, mod, rm, src);
+                }
                 break;
 
             /*
@@ -840,8 +1542,8 @@ public class Intel8086 {
             case 0x55: // PUSH BP
             case 0x56: // PUSH SI
             case 0x57: // PUSH DI
-                reg = queue[0] & 0b111;
-                src = getReg(0b1, reg);
+                reg = op & 0b111;
+                src = getReg(W, reg);
                 push(src);
                 break;
 
@@ -850,7 +1552,7 @@ public class Intel8086 {
             case 0x0e: // PUSH CS
             case 0x16: // PUSH SS
             case 0x1e: // PUSH DS
-                reg = queue[0] >>> 3 & 0b111;
+                reg = op >>> 3 & 0b111;
                 src = getSegReg(reg);
                 push(src);
                 break;
@@ -872,9 +1574,9 @@ public class Intel8086 {
             case 0x5d: // POP BP
             case 0x5e: // POP SI
             case 0x5f: // POP DI
-                reg = queue[0] & 0b111;
+                reg = op & 0b111;
                 src = pop();
-                setReg(0b1, reg, src);
+                setReg(W, reg, src);
                 break;
 
             // Segment Register
@@ -882,7 +1584,7 @@ public class Intel8086 {
             case 0x0f: // POP CS
             case 0x17: // POP SS
             case 0x1f: // POP DS
-                reg = queue[0] >>> 3 & 0b111;
+                reg = op >>> 3 & 0b111;
                 src = pop();
                 setSegReg(reg, src);
                 break;
@@ -913,11 +1615,11 @@ public class Intel8086 {
             case 0x95: // XCHG AX,BP
             case 0x96: // XCHG AX,SI
             case 0x97: // XCHG AX,DI
-                reg = queue[0] & 0b111;
-                dst = getReg(0b1, 0b000);
-                src = getReg(0b1, reg);
-                setReg(0b1, 0b000, src);
-                setReg(0b1, reg, dst);
+                reg = op & 0b111;
+                dst = getReg(W, AX);
+                src = getReg(W, reg);
+                setReg(W, AX, src);
+                setReg(W, reg, dst);
                 break;
 
             /*
@@ -936,7 +1638,7 @@ public class Intel8086 {
              * reverse.
              */
             case 0xd7: // XLAT SOURCE-TABLE
-                al = getMem(os, (bh << 8 | bl) + al);
+                al = getMem(B, getAddr(os, getReg(W, BX) + al));
                 break;
 
             /*
@@ -981,8 +1683,8 @@ public class Intel8086 {
             case 0xc5: // LDS REG16,MEM16
                 decode();
                 src = getEA(mod, rm);
-                setReg(w, reg, memory[src + 1] << 8 | memory[src]);
-                ds = memory[src + 3] << 8 | memory[src + 2];
+                setReg(w, reg, getMem(W, src));
+                ds = getMem(W, src + 2);
                 break;
 
             /*
@@ -1002,8 +1704,8 @@ public class Intel8086 {
             case 0xc4: // LES REG16,MEM16
                 decode();
                 src = getEA(mod, rm);
-                setReg(w, reg, memory[src + 1] << 8 | memory[src]);
-                es = memory[src + 3] << 8 | memory[src + 2];
+                setReg(w, reg, getMem(W, src));
+                es = getMem(W, src + 2);
                 break;
 
             /*
@@ -1158,30 +1860,30 @@ public class Intel8086 {
             // Reg./Memory and Register to Either
             case 0x00: // ADD REG8/MEM8,REG8
             case 0x01: // ADD REG16/MEM16,REG16
-                decode();
-                dst = getRM(w, mod, rm);
-                src = getReg(w, reg);
-                res = add(w, dst, src);
-                setRM(w, mod, rm, res);
-                break;
             case 0x02: // ADD REG8,REG8/MEM8
             case 0x03: // ADD REG16,REG16/MEM16
                 decode();
-                dst = getReg(w, reg);
-                src = getRM(w, mod, rm);
+                if (d == 0b0) {
+                    dst = getRM(w, mod, rm);
+                    src = getReg(w, reg);
+                } else {
+                    dst = getReg(w, reg);
+                    src = getRM(w, mod, rm);
+                }
                 res = add(w, dst, src);
-                setReg(w, reg, res);
+                if (d == 0b0)
+                    setRM(w, mod, rm, res);
+                else
+                    setReg(w, reg, res);
                 break;
 
             // Immediate to Accumulator
             case 0x04: // ADD AL,IMMED8
             case 0x05: // ADD AX,IMMED16
                 dst = getReg(w, 0);
-                src = getMem(ip++);
-                if (w == 0b1)
-                    src |= getMem(ip++) << 8;
+                src = getMem(w);
                 res = add(w, dst, src);
-                setReg(w, 0b000, res);
+                setReg(w, AX, res);
                 break;
 
             /*
@@ -1197,30 +1899,30 @@ public class Intel8086 {
             // Reg./Memory with Register to Either
             case 0x10: // ADC REG8/MEM8,REG8
             case 0x11: // ADC REG16/MEM16,REG16
-                decode();
-                dst = getRM(w, mod, rm);
-                src = getReg(w, reg);
-                res = adc(w, dst, src);
-                setRM(w, mod, rm, res);
-                break;
             case 0x12: // ADC REG8,REG8/MEM8
             case 0x13: // ADC REG16,REG16/MEM16
                 decode();
-                dst = getReg(w, reg);
-                src = getRM(w, mod, rm);
+                if (d == 0b0) {
+                    dst = getRM(w, mod, rm);
+                    src = getReg(w, reg);
+                } else {
+                    dst = getReg(w, reg);
+                    src = getRM(w, mod, rm);
+                }
                 res = adc(w, dst, src);
-                setReg(w, reg, res);
+                if (d == 0b0)
+                    setRM(w, mod, rm, res);
+                else
+                    setReg(w, reg, res);
                 break;
 
             // Immediate to Accumulator
             case 0x14: // ADC AL,IMMED8
             case 0X15: // ADC AX,IMMED16
-                dst = getReg(w, 0b000);
-                src = getMem(ip++);
-                if (w == 0b1)
-                    src |= getMem(ip++) << 8;
+                dst = getReg(w, AX);
+                src = getMem(w);
                 res = adc(w, dst, src);
-                setReg(w, 0b000, res);
+                setReg(w, AX, res);
                 break;
 
             /*
@@ -1239,10 +1941,10 @@ public class Intel8086 {
             case 0x45: // INC BP
             case 0x46: // INC SI
             case 0x47: // INC DI
-                reg = queue[0] & 0b111;
-                src = getReg(0b1, reg);
-                res = inc(0b1, src);
-                setReg(0b1, reg, res);
+                reg = op & 0b111;
+                src = getReg(W, reg);
+                res = inc(W, src);
+                setReg(W, reg, res);
                 break;
 
             /*
@@ -1292,7 +1994,7 @@ public class Intel8086 {
                     setFlag(CF, true);
                 } else
                     setFlag(CF, false);
-                setFlags(0b0, al);
+                setFlags(B, al);
                 break;
             }
 
@@ -1310,30 +2012,30 @@ public class Intel8086 {
             // Reg./Memory and Register to Either
             case 0x28: // SUB REG8/MEM8,REG8
             case 0x29: // SUB REG16/MEM16,REG16
-                decode();
-                dst = getRM(w, mod, rm);
-                src = getReg(w, reg);
-                res = sub(w, dst, src);
-                setRM(w, mod, rm, res);
-                break;
             case 0x2a: // SUB REG8,REG8/MEM8
             case 0x2b: // SUB REG16,REG16/MEM16
                 decode();
-                dst = getReg(w, reg);
-                src = getRM(w, mod, rm);
+                if (d == 0b0) {
+                    dst = getRM(w, mod, rm);
+                    src = getReg(w, reg);
+                } else {
+                    dst = getReg(w, reg);
+                    src = getRM(w, mod, rm);
+                }
                 res = sub(w, dst, src);
-                setReg(w, reg, res);
+                if (d == 0b0)
+                    setRM(w, mod, rm, res);
+                else
+                    setReg(w, reg, res);
                 break;
 
             // Immediate from Accumulator
             case 0x2c: // SUB AL,IMMED8
             case 0x2d: // SUB AX,IMMED16
-                dst = getReg(w, 0b000);
-                src = getMem(ip++);
-                if (w == 0b1)
-                    src |= getMem(ip++) << 8;
+                dst = getReg(w, AX);
+                src = getMem(w);
                 res = sub(w, dst, src);
-                setReg(w, 0b000, res);
+                setReg(w, AX, res);
                 break;
 
             /*
@@ -1350,30 +2052,30 @@ public class Intel8086 {
             // Reg./Memory with Register to Either
             case 0x18: // SBB REG8/MEM8,REG8
             case 0x19: // SBB REG16/MEM16,REG16
-                decode();
-                dst = getRM(w, mod, rm);
-                src = getReg(w, reg);
-                res = sbb(w, dst, src);
-                setRM(w, mod, rm, res);
-                break;
             case 0x1a: // SBB REG8,REG8/MEM8
             case 0x1b: // SBB REG16,REG16/MEM16
                 decode();
-                dst = getReg(w, reg);
-                src = getRM(w, mod, rm);
+                if (d == 0b0) {
+                    dst = getRM(w, mod, rm);
+                    src = getReg(w, reg);
+                } else {
+                    dst = getReg(w, reg);
+                    src = getRM(w, mod, rm);
+                }
                 res = sbb(w, dst, src);
-                setReg(w, reg, res);
+                if (d == 0b0)
+                    setRM(w, mod, rm, res);
+                else
+                    setReg(w, reg, res);
                 break;
 
             // Immediate to Accumulator
             case 0x1c: // SBB AL,IMMED8
             case 0X1d: // SBB AX,IMMED16
-                dst = getReg(w, 0b000);
-                src = getMem(ip++);
-                if (w == 0b1)
-                    src |= getMem(ip++) << 8;
+                dst = getReg(w, AX);
+                src = getMem(w);
                 res = sbb(w, dst, src);
-                setReg(w, 0b000, res);
+                setReg(w, AX, res);
                 break;
 
             /*
@@ -1392,10 +2094,10 @@ public class Intel8086 {
             case 0x4d: // DEC BP
             case 0x4e: // DEC SI
             case 0x4f: // DEC DI
-                reg = queue[0] & 0b111;
-                dst = getReg(0b1, reg);
-                res = dec(0b1, dst);
-                setReg(0b1, reg, res);
+                reg = op & 0b111;
+                dst = getReg(W, reg);
+                res = dec(W, dst);
+                setReg(W, reg, res);
                 break;
 
             /*
@@ -1427,26 +2129,24 @@ public class Intel8086 {
             // Register/Memory and Register
             case 0x38: // CMP REG8/MEM8,REG8
             case 0x39: // CMP REG16/MEM16,REG16
-                decode();
-                dst = getRM(w, mod, rm);
-                src = getReg(w, reg);
-                sub(w, dst, src);
-                break;
             case 0x3a: // CMP REG8,REG8/MEM8
             case 0x3b: // CMP REG16,REG16/MEM16
                 decode();
-                dst = getReg(w, reg);
-                src = getRM(w, mod, rm);
+                if (d == 0b0) {
+                    dst = getRM(w, mod, rm);
+                    src = getReg(w, reg);
+                } else {
+                    dst = getReg(w, reg);
+                    src = getRM(w, mod, rm);
+                }
                 sub(w, dst, src);
                 break;
 
             // Immediate with Accumulator
             case 0x3c: // CMP AL,IMMED8
             case 0x3d: // CMP AX,IMMED16
-                dst = getReg(w, 0b000);
-                src = getMem(ip++);
-                if (w == 0b1)
-                    src |= getMem(ip++) << 8;
+                dst = getReg(w, AX);
+                src = getMem(w);
                 sub(w, dst, src);
                 break;
 
@@ -1501,7 +2201,7 @@ public class Intel8086 {
                     setFlag(CF, true);
                 } else
                     setFlag(CF, false);
-                setFlags(0b0, al);
+                setFlags(B, al);
                 break;
             }
 
@@ -1553,12 +2253,12 @@ public class Intel8086 {
              * and OF is undefined following execution of AAM.
              */
             case 0xd4: // AAM
-                src = getMem(ip++);
+                src = getMem(B);
                 if (src == 0)
                     break; //TODO Generate a type 0 interrupt.
                 ah = al / src & 0xff;
                 al = al % src & 0xff;
-                setFlags(0b1, ah << 8 | al);
+                setFlags(W, getReg(W, AX));
                 break;
 
             /*
@@ -1622,10 +2322,10 @@ public class Intel8086 {
              * is undefined following execution of AAD.
              */
             case 0xd5: // AAD
-                src = getMem(ip++);
+                src = getMem(B);
                 al = ah * src + al & 0xff;
                 ah = 0;
-                setFlags(0b0, al);
+                setFlags(B, al);
                 break;
 
             /*
@@ -1652,13 +2352,10 @@ public class Intel8086 {
              * dividend from a word prior to performing word division.
              */
             case 0x99: // CWD
-                if ((ah & 0x80) == 0x80) {
-                    dl = 0xff;
-                    dh = 0xff;
-                } else {
-                    dl = 0x00;
-                    dh = 0x00;
-                }
+                if ((ah & 0x80) == 0x80)
+                    setReg(W, DX, 0xffff);
+                else
+                    setReg(W, DX, 0x0000);
                 break;
 
             /*
@@ -1708,33 +2405,32 @@ public class Intel8086 {
             // Register/Memory and Register
             case 0x20: // AND REG8/MEM8,REG8
             case 0x21: // AND REG16/MEM16,REG16
-                decode();
-                dst = getRM(w, mod, rm);
-                src = getReg(w, reg);
-                res = dst & src;
-                logic(w, res);
-                setRM(w, mod, rm, res);
-                break;
             case 0x22: // AND REG8,REG8/MEM8
             case 0x23: // AND REG16,REG16/MEM16
                 decode();
-                dst = getReg(w, reg);
-                src = getRM(w, mod, rm);
+                if (d == 0b0) {
+                    dst = getRM(w, mod, rm);
+                    src = getReg(w, reg);
+                } else {
+                    dst = getReg(w, reg);
+                    src = getRM(w, mod, rm);
+                }
                 res = dst & src;
                 logic(w, res);
-                setReg(w, reg, res);
+                if (d == 0b0)
+                    setRM(w, mod, rm, res);
+                else
+                    setReg(w, reg, res);
                 break;
 
             // Immediate to Accumulator
             case 0x24: // AND AL,IMMED8
             case 0x25: // AND AX,IMMED16
-                dst = getReg(w, 0b000);
-                src = getMem(ip++);
-                if (w == 0b1)
-                    src |= getMem(ip++) << 8;
+                dst = getReg(w, AX);
+                src = getMem(w);
                 res = dst & src;
                 logic(w, res);
-                setReg(w, 0b000, res);
+                setReg(w, AX, res);
                 break;
 
             /*
@@ -1748,33 +2444,32 @@ public class Intel8086 {
             // Register/Memory and Register
             case 0x08: // OR REG8/MEM8,REG8
             case 0x09: // OR REG16/MEM16,REG16
-                decode();
-                dst = getRM(w, mod, rm);
-                src = getReg(w, reg);
-                res = dst | src;
-                logic(w, res);
-                setRM(w, mod, rm, res);
-                break;
             case 0x0a: // OR REG8,REG8/MEM8
             case 0x0b: // OR REG16,REG16/MEM16
                 decode();
-                dst = getReg(w, reg);
-                src = getRM(w, mod, rm);
+                if (d == 0b0) {
+                    dst = getRM(w, mod, rm);
+                    src = getReg(w, reg);
+                } else {
+                    dst = getReg(w, reg);
+                    src = getRM(w, mod, rm);
+                }
                 res = dst | src;
                 logic(w, res);
-                setReg(w, reg, res);
+                if (d == 0b0)
+                    setRM(w, mod, rm, res);
+                else
+                    setReg(w, reg, res);
                 break;
 
             // Immediate to Accumulator
             case 0x0c: // OR AL,IMMED8
             case 0x0d: // OR AX,IMMED16
-                dst = getReg(w, 0b000);
-                src = getMem(ip++);
-                if (w == 0b1)
-                    src |= getMem(ip++) << 8;
+                dst = getReg(w, AX);
+                src = getMem(w);
                 res = dst | src;
                 logic(w, res);
-                setReg(w, 0b000, res);
+                setReg(w, AX, res);
                 break;
 
             /*
@@ -1789,33 +2484,32 @@ public class Intel8086 {
             // Register/Memory and Register
             case 0x30: // XOR REG8/MEM8,REG8
             case 0x31: // XOR REG16/MEM16,REG16
-                decode();
-                dst = getRM(w, mod, rm);
-                src = getReg(w, reg);
-                res = dst ^ src;
-                logic(w, res);
-                setRM(w, mod, rm, res);
-                break;
             case 0x32: // XOR REG8,REG8/MEM8
             case 0x33: // XOR REG16,REG16/MEM16
                 decode();
-                dst = getReg(w, reg);
-                src = getRM(w, mod, rm);
+                if (d == 0b0) {
+                    dst = getRM(w, mod, rm);
+                    src = getReg(w, reg);
+                } else {
+                    dst = getReg(w, reg);
+                    src = getRM(w, mod, rm);
+                }
                 res = dst ^ src;
                 logic(w, res);
-                setReg(w, reg, res);
+                if (d == 0b0)
+                    setRM(w, mod, rm, res);
+                else
+                    setReg(w, reg, res);
                 break;
 
             // Immediate to Accumulator
             case 0x34: // XOR AL,IMMED8
             case 0x35: // XOR AX,IMMED16
-                dst = getReg(w, 0b000);
-                src = getMem(ip++);
-                if (w == 0b1)
-                    src |= getMem(ip++) << 8;
+                dst = getReg(w, AX);
+                src = getMem(w);
                 res = dst ^ src;
                 logic(w, res);
-                setReg(w, 0b000, res);
+                setReg(w, AX, res);
                 break;
 
             /*
@@ -1839,10 +2533,8 @@ public class Intel8086 {
             // Immediate and Accumulator
             case 0xa8: // TEST AL,IMMED8
             case 0xa9: // TEST AX,IMMED16
-                dst = getReg(w, 0b000);
-                src = getMem(ip++);
-                if (w == 0b1)
-                    src |= getMem(ip++) << 8;
+                dst = getReg(w, AX);
+                src = getMem(w);
                 logic(w, dst & src);
                 break;
 
@@ -2070,12 +2762,8 @@ public class Intel8086 {
              */
             case 0xa4: // MOVS DEST-STR8,SRC-STR8
             case 0xa5: // MOVS DEST-STR16,SRC-STR16
-                src = getMem(os, si);
-                if (w == 0b1)
-                    src |= getMem(os, si + 1) << 8;
-                setMem(es, di, src & 0xff);
-                if (w == 0b1)
-                    setMem(es, di + 1, src >>> 8 & 0xff);
+                src = getMem(w, getAddr(os, si));
+                setMem(w, getAddr(es, di), src);
                 break;
 
             /*
@@ -2098,12 +2786,8 @@ public class Intel8086 {
              */
             case 0xa6: // CMPS DEST-STR8,SRC-STR8
             case 0xa7: // CMPS DEST-STR16,SRC-STR16
-                dst = getMem(es, di);
-                if (w == 0b1)
-                    dst |= getMem(es, di + 1) << 8;
-                src = getMem(os, si);
-                if (w == 0b1)
-                    src |= getMem(os, si + 1) << 8;
+                dst = getMem(w, getAddr(es, di));
+                src = getMem(w, getAddr(os, si));
                 sub(w, src, dst);
                 if (rep == 1 && !getFlag(ZF) || rep == 2 && getFlag(ZF))
                     rep = 0;
@@ -2129,12 +2813,8 @@ public class Intel8086 {
              */
             case 0xae: // SCAS DEST-STR8
             case 0xaf: // SCAS DEST-STR16
-                dst = getMem(es, di);
-                if (w == 0b1)
-                    dst |= getMem(es, di + 1) << 8;
-                src = al;
-                if (w == 0b1)
-                    src |= ah << 8;
+                dst = getMem(w, getAddr(es, di));
+                src = getReg(w, AX);
                 sub(w, src, dst);
                 if (rep == 1 && !getFlag(ZF) || rep == 2 && getFlag(ZF))
                     rep = 0;
@@ -2154,12 +2834,8 @@ public class Intel8086 {
              */
             case 0xac: // LODS SRC-STR8
             case 0xad: // LODS SRC-STR16
-                src = getMem(os, si);
-                if (w == 0b1)
-                    src |= getMem(os, si + 1) << 8;
-                al = src & 0xff;
-                if (w == 0b1)
-                    ah = src >>> 8 & 0xff;
+                src = getMem(w, getAddr(os, si));
+                setReg(w, AX, src);
                 break;
 
             /*
@@ -2173,12 +2849,8 @@ public class Intel8086 {
              */
             case 0xaa: // STOS DEST-STR8
             case 0xab: // STOS DEST-STR16
-                src = al;
-                if (w == 0b1)
-                    src |= ah << 8;
-                setMem(es, di, src & 0xff);
-                if (w == 0b1)
-                    setMem(es, di + 1, src >>> 8 & 0xff);
+                src = getReg(w, AX);
+                setMem(w, getAddr(es, di), src);
                 break;
 
             /*
@@ -2272,19 +2944,16 @@ public class Intel8086 {
              */
             // Direct with Segment
             case 0xe8: // CALL NEAR-PROC
-                dst = getMem(ip++);
-                dst |= getMem(ip++) << 8;
-                dst = signext(0b1, dst);
+                dst = getMem(W);
+                dst = signconv(W, dst);
                 push(ip);
                 ip += dst;
                 break;
 
             // Direct Intersegment
             case 0x9a: // CALL FAR-PROC
-                dst = getMem(ip++);
-                dst |= getMem(ip++) << 8;
-                src = getMem(ip++);
-                src |= getMem(ip++) << 8;
+                dst = getMem(W);
+                src = getMem(W);
                 push(cs);
                 push(ip);
                 ip = dst;
@@ -2314,8 +2983,7 @@ public class Intel8086 {
 
             // Within Seg Adding Immed to SP
             case 0xc2: // RET IMMED16 (intraseg)
-                src = getMem(ip++);
-                src |= getMem(ip++) << 8;
+                src = getMem(W);
                 ip = pop();
                 sp += src;
                 break;
@@ -2328,8 +2996,7 @@ public class Intel8086 {
 
             // Intersegment Adding Immediate to SP
             case 0xca: // RET IMMED16 (intersegment)
-                src = getMem(ip++);
-                src |= getMem(ip++) << 8;
+                src = getMem(W);
                 ip = pop();
                 cs = pop();
                 sp += src;
@@ -2371,25 +3038,22 @@ public class Intel8086 {
              */
             // Direct within Segment
             case 0xe9: // JMP NEAR-LABEL
-                dst = getMem(ip++);
-                dst |= getMem(ip++) << 8;
-                dst = signext(0b1, dst);
+                dst = getMem(W);
+                dst = signconv(W, dst);
                 ip += dst;
                 break;
 
             // Direct within Segment-Short
             case 0xeb: // JMP SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 ip += dst;
                 break;
 
             // Direct Intersegment
             case 0xea: // JMP FAR-LABEL
-                dst = getMem(ip++);
-                dst |= getMem(ip++) << 8;
-                src = getMem(ip++);
-                src |= getMem(ip++) << 8;
+                dst = getMem(W);
+                src = getMem(W);
                 ip = dst;
                 cs = src;
                 break;
@@ -2418,8 +3082,8 @@ public class Intel8086 {
              * Jump if overflow - OF=1.
              */
             case 0x70: // JO SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (getFlag(OF))
                     ip += dst;
                 break;
@@ -2430,8 +3094,8 @@ public class Intel8086 {
              * Jump if not overflow - OF=0.
              */
             case 0x71: // JNO SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (!getFlag(OF))
                     ip += dst;
                 break;
@@ -2442,8 +3106,8 @@ public class Intel8086 {
              * Jump if below/not above nor equal/carry - CF=1.
              */
             case 0x72: // JB/JNAE/JC SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (getFlag(CF))
                     ip += dst;
                 break;
@@ -2454,8 +3118,8 @@ public class Intel8086 {
              * Jump if not below/above or equal/not carry - CF=0.
              */
             case 0x73: // JNB/JAE/JNC SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (!getFlag(CF))
                     ip += dst;
                 break;
@@ -2466,8 +3130,8 @@ public class Intel8086 {
              * Jump if equal/zero - ZF=1.
              */
             case 0x74: // JE/JZ SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (getFlag(ZF))
                     ip += dst;
                 break;
@@ -2478,8 +3142,8 @@ public class Intel8086 {
              * Jump if not equal/not zero - ZF=0.
              */
             case 0x75: // JNE/JNZ SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (!getFlag(ZF))
                     ip += dst;
                 break;
@@ -2490,8 +3154,8 @@ public class Intel8086 {
              * Jump if below or equal/not above - (CF or ZF)=1.
              */
             case 0x76: // JBE/JNA SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (getFlag(CF) | getFlag(ZF))
                     ip += dst;
                 break;
@@ -2502,8 +3166,8 @@ public class Intel8086 {
              * Jump if not below nor equal/above - (CF or ZF)=0.
              */
             case 0x77: // JNBE/JA SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (!(getFlag(CF) | getFlag(ZF)))
                     ip += dst;
                 break;
@@ -2514,8 +3178,8 @@ public class Intel8086 {
              * Jump if sign - SF=1.
              */
             case 0x78: // JS SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (getFlag(SF))
                     ip += dst;
                 break;
@@ -2526,8 +3190,8 @@ public class Intel8086 {
              * Jump if not sign - SF=0.
              */
             case 0x79: // JNS SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (!getFlag(SF))
                     ip += dst;
                 break;
@@ -2538,8 +3202,8 @@ public class Intel8086 {
              * Jump if parity/parity equal - PF=1.
              */
             case 0x7a: // JP/JPE SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (getFlag(PF))
                     ip += dst;
                 break;
@@ -2550,8 +3214,8 @@ public class Intel8086 {
              * Jump if not parity/parity odd - PF=0.
              */
             case 0x7b: // JNP/JPO SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (!getFlag(PF))
                     ip += dst;
                 break;
@@ -2562,8 +3226,8 @@ public class Intel8086 {
              * Jump if less/not greater nor equal - (SF xor OF)=1.
              */
             case 0x7c: // JL/JNGE SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (getFlag(SF) ^ getFlag(OF))
                     ip += dst;
                 break;
@@ -2574,8 +3238,8 @@ public class Intel8086 {
              * Jump if not less/greater or equal - (SF xor OF)=0.
              */
             case 0x7d: // JNL/JGE SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (!(getFlag(SF) ^ getFlag(OF)))
                     ip += dst;
                 break;
@@ -2586,8 +3250,8 @@ public class Intel8086 {
              * Jump if less or equal/not greater - ((SF xor OF) or ZF)=1.
              */
             case 0x7e: // JLE/JNG SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (getFlag(SF) ^ getFlag(OF) | getFlag(ZF))
                     ip += dst;
                 break;
@@ -2598,9 +3262,86 @@ public class Intel8086 {
              * Jump if not less nor equal/greater - ((SF xor OF) or ZF)=0.
              */
             case 0x7f: // JNLE/JG SHORT-LABEL
-                dst = getMem(ip++);
-                dst = signext(0b0, dst);
+                dst = getMem(B);
+                dst = signconv(B, dst);
                 if (!(getFlag(SF) ^ getFlag(OF) | getFlag(ZF)))
+                    ip += dst;
+                break;
+
+            /*
+             * Iteration Control
+             *
+             * The iteration control instructions can be used to regulate the
+             * repetition of software loops. These instructions use the CX
+             * register as a counter. Like the conditional transfers, the
+             * iteration control instructions are self-relative and may only
+             * transfer to targets that are within -128 to +127 bytes of
+             * themselves, i.e., they are SHORT transfers.
+             */
+            /*
+             * LOOP short-label
+             *
+             * LOOP decrements CX by 1 and transfers control to the target
+             * operand if CX is not 0; otherwise the instruction following LOOP
+             * is executed.
+             */
+            case 0xe2: // LOOP SHORT-LABEL
+                dst = getMem(B);
+                dst = signconv(B, dst);
+                src = getReg(W, CX) - 1;
+                setReg(W, CX, src);
+                if (src != 0)
+                    ip += dst;
+                break;
+
+            /*
+             * LOOPE/LOOPZ short-label
+             *
+             * LOOPE and LOOPZ (Loop While Equal and Loop While Zero) are
+             * different mnemonics for the same instruction (similar to the REPE
+             * and REPZ repeat prefixes). CX is decremented by 1, and control is
+             * transferred to the target operand if CX is not 0 and if ZF is
+             * set; otherwise the instruction following LOOPE/LOOPZ is executed.
+             */
+            case 0xe1: // LOOPE/LOOPZ SHORT-LABEL
+                dst = getMem(B);
+                dst = signconv(B, dst);
+                src = getReg(W, CX) - 1;
+                setReg(W, CX, src);
+                if (src != 0 && getFlag(ZF))
+                    ip += dst;
+                break;
+
+            /*
+             * LOOPNE/LOOPNZ short-label
+             *
+             * LOOPNE and LOOPNZ (Loop While Not Equal and Loop While Not Zero)
+             * are also synonyms for the same instruction. CX is decremented by
+             * 1, and control is transferred to the target operand if CX is not
+             * 0 and if ZF is clear; otherwise the next sequential instruction
+             * is executed.
+             */
+            case 0xe0: // LOOPNE/LOOPNZ SHORT-LABEL
+                dst = getMem(B);
+                dst = signconv(B, dst);
+                src = getReg(W, CX) - 1;
+                setReg(W, CX, src);
+                if (src != 0 && !getFlag(ZF))
+                    ip += dst;
+                break;
+
+            /*
+             * JCXZ short-label
+             *
+             * JCXZ (Jump If CX Zero) transfers control to the target operand if
+             * CX is O. This instruction is useful at the beginning of a loop;
+             * to bypass the loop if CX has a zero value, i.e., to execute the
+             * loop zero times.
+             */
+            case 0xe3: // JCXZ SHORT-LABEL
+                dst = getMem(B);
+                dst = signconv(B, dst);
+                if (getReg(W, CX) == 0)
                     ip += dst;
                 break;
 
@@ -2704,11 +3445,11 @@ public class Intel8086 {
                 // CMP REG16/MEM16,IMMED8
                 decode();
                 dst = getRM(w, mod, rm);
-                src = getMem(ip++);
-                if (queue[0] == 0x81)
-                    src |= getMem(ip++) << 8;
+                src = getMem(B);
+                if (op == 0x81)
+                    src |= getMem(B) << 8;
                 // Perform sign extension if needed.
-                else if (queue[0] == 0x83 && (src & 0x80) == 0x80)
+                else if (op == 0x83 && (src & SIGN[B]) > 0)
                     src |= 0xff00;
                 switch (reg) {
                 case 0b000: // ADD
@@ -2716,7 +3457,7 @@ public class Intel8086 {
                     setRM(w, mod, rm, res);
                     break;
                 case 0b001: // OR
-                    if (queue[0] == 0x80 || queue[0] == 0x81) {
+                    if (op == 0x80 || op == 0x81) {
                         res = dst | src;
                         logic(w, res);
                         setRM(w, mod, rm, res);
@@ -2732,7 +3473,7 @@ public class Intel8086 {
                     setRM(w, mod, rm, res);
                     break;
                 case 0b100: // AND
-                    if (queue[0] == 0x80 || queue[0] == 0x81) {
+                    if (op == 0x80 || op == 0x81) {
                         res = dst & src;
                         logic(w, res);
                         setRM(w, mod, rm, res);
@@ -2743,7 +3484,7 @@ public class Intel8086 {
                     setRM(w, mod, rm, res);
                     break;
                 case 0b110: // XOR
-                    if (queue[0] == 0x80 || queue[0] == 0x81) {
+                    if (op == 0x80 || op == 0x81) {
                         res = dst ^ src;
                         logic(w, res);
                         setRM(w, mod, rm, res);
@@ -2807,7 +3548,7 @@ public class Intel8086 {
             {
                 decode();
                 dst = getRM(w, mod, rm);
-                src = queue[0] == 0xd0 || queue[0] == 0xd1 ? 1 : cl;
+                src = op == 0xd0 || op == 0xd1 ? 1 : cl;
                 boolean tempCF;
                 switch (reg) {
                 case 0b000: // ROL
@@ -2884,7 +3625,7 @@ public class Intel8086 {
                         setFlag(OF, false);
                     for (int cnt = 0; cnt < src; ++cnt) {
                         setFlag(CF, (dst & 0b1) == 0b1);
-                        dst = signext(w, dst);
+                        dst = signconv(w, dst);
                         dst >>= 1;
                         dst &= MASK[w];
                     }
@@ -2919,9 +3660,7 @@ public class Intel8086 {
                 src = getRM(w, mod, rm);
                 switch (reg) {
                 case 0b000: // TEST
-                    dst = getMem(ip++);
-                    if (w == 0b1)
-                        dst |= getMem(ip++) << 8;
+                    dst = getMem(w);
                     logic(w, dst & src);
                     break;
                 case 0b010: // NOT
@@ -2933,11 +3672,10 @@ public class Intel8086 {
                     setRM(w, mod, rm, dst);
                     break;
                 case 0b100: // MUL
-                    if (w == 0b0) {
+                    if (w == B) {
                         dst = al;
                         res = dst * src & 0xffff;
-                        al = res & 0xff;
-                        ah = res >>> 8 & 0xff;
+                        setReg(W, AX, res);
                         if (ah > 0) {
                             setFlag(CF, true);
                             setFlag(OF, true);
@@ -2946,13 +3684,11 @@ public class Intel8086 {
                             setFlag(OF, false);
                         }
                     } else {
-                        dst = ah << 8 | al;
+                        dst = getReg(W, AX);
                         final long lres = (long) dst * (long) src & 0xffffffff;
-                        al = (int) (lres & 0xff);
-                        ah = (int) (lres >>> 8 & 0xff);
-                        dl = (int) (lres >>> 16 & 0xff);
-                        dh = (int) (lres >>> 24 & 0xff);
-                        if ((dh << 8 | dl) > 0) {
+                        setReg(W, AX, (int) lres);
+                        setReg(W, DX, (int) (lres >>> 16));
+                        if (getReg(W, DX) > 0) {
                             setFlag(CF, true);
                             setFlag(OF, true);
                         } else {
@@ -2962,13 +3698,12 @@ public class Intel8086 {
                     }
                     break;
                 case 0b101: // IMUL
-                    if (w == 0b0) {
-                        src = signext(0b0, src);
+                    if (w == B) {
+                        src = signconv(B, src);
                         dst = al;
-                        dst = signext(0b0, dst);
+                        dst = signconv(B, dst);
                         res = dst * src & 0xffff;
-                        al = res & 0xff;
-                        ah = res >>> 8 & 0xff;
+                        setReg(W, AX, res);
                         if (ah > 0x00 && ah < 0xff) {
                             setFlag(CF, true);
                             setFlag(OF, true);
@@ -2977,15 +3712,14 @@ public class Intel8086 {
                             setFlag(OF, false);
                         }
                     } else {
-                        src = signext(0b1, src);
+                        src = signconv(W, src);
                         dst = ah << 8 | al;
-                        dst = signext(0b1, dst);
+                        dst = signconv(W, dst);
                         final long lres = (long) dst * (long) src & 0xffffffff;
-                        al = (int) (lres & 0xff);
-                        ah = (int) (lres >>> 8 & 0xff);
-                        dl = (int) (lres >>> 16 & 0xff);
-                        dh = (int) (lres >>> 24 & 0xff);
-                        if ((dh << 8 | dl) > 0x0000 && (dh << 8 | dl) < 0xffff) {
+                        setReg(W, AX, (int) lres);
+                        setReg(W, DX, (int) (lres >>> 16));
+                        final int dx = getReg(W, DX);
+                        if (dx > 0x0000 && dx < 0xffff) {
                             setFlag(CF, true);
                             setFlag(OF, true);
                         } else {
@@ -2997,7 +3731,7 @@ public class Intel8086 {
                 case 0b110: // DIV
                     if (src == 0)
                         break; //TODO Generate a type 0 interrupt.
-                    if (w == 0b0) {
+                    if (w == B) {
                         dst = ah << 8 | al;
                         res = dst / src & 0xffff;
                         if (res > 0xff)
@@ -3007,26 +3741,24 @@ public class Intel8086 {
                             ah = dst % src & 0xff;
                         }
                     } else {
-                        final long ldst = (long) (dh << 8 | dl) << 16 | ah << 8 | al;
+                        final long ldst = (long) getReg(W, DX) << 16 | getReg(W, AX);
                         long lres = ldst / src & 0xffffffff;
                         if (lres > 0xffff)
                             break; //TODO Generate a type 0 interrupt.
                         else {
-                            al = (int) (lres & 0xff);
-                            ah = (int) (lres >>> 8 & 0xff);
+                            setReg(W, AX, (int) lres);
                             lres = ldst % src & 0xffff;
-                            dl = (int) (lres & 0xff);
-                            dh = (int) (lres >>> 8 & 0xff);
+                            setReg(W, DX, (int) lres);
                         }
                     }
                     break;
                 case 0b111: // IDIV
                     if (src == 0)
                         break; //TODO Generate a type 0 interrupt.
-                    if (w == 0b0) {
-                        src = signext(0b0, src);
-                        dst = ah << 8 | al;
-                        dst = signext(0b1, dst);
+                    if (w == B) {
+                        src = signconv(B, src);
+                        dst = getReg(W, AX);
+                        dst = signconv(W, dst);
                         res = dst / src & 0xffff;
                         if (res > 0x007f && res < 0xff81)
                             break; //TODO Generate a type 0 interrupt.
@@ -3035,19 +3767,17 @@ public class Intel8086 {
                             ah = dst % src & 0xff;
                         }
                     } else {
-                        src = signext(0b1, src);
-                        long ldst = (long) (dh << 8 | dl) << 16 | ah << 8 | al;
-                        // Do sign extension manually.
+                        src = signconv(W, src);
+                        long ldst = (long) getReg(W, DX) << 16 | getReg(W, AX);
+                        // Do sign conversion manually.
                         ldst = ldst << 32 >> 32;
                         long lres = ldst / src & 0xffffffff;
                         if (lres > 0x00007fff | lres < 0xffff8000)
                             break; //TODO Generate a type 0 interrupt.
                         else {
-                            al = (int) (lres & 0xff);
-                            ah = (int) (lres >>> 8 & 0xff);
+                            setReg(W, AX, (int) lres);
                             lres = ldst % src & 0xffff;
-                            dl = (int) (lres & 0xff);
-                            dh = (int) (lres >>> 8 & 0xff);
+                            setReg(W, DX, (int) lres);
                         }
                     }
                     break;
@@ -3104,16 +3834,16 @@ public class Intel8086 {
                     push(cs);
                     push(ip);
                     dst = getEA(mod, rm);
-                    ip = memory[dst + 1] << 8 | memory[dst];
-                    cs = memory[dst + 3] << 8 | memory[dst + 2];
+                    ip = getMem(W, dst);
+                    cs = getMem(W, dst + 2);
                     break;
                 case 0b100: // JMP
                     ip = src;
                     break;
                 case 0b101: // JMP
                     dst = getEA(mod, rm);
-                    ip = memory[dst + 1] << 8 | memory[dst];
-                    cs = memory[dst + 3] << 8 | memory[dst + 2];
+                    ip = getMem(W, dst);
+                    cs = getMem(W, dst + 2);
                     break;
                 case 0b110: // PUSH
                     push(src);
@@ -3122,712 +3852,25 @@ public class Intel8086 {
                 break;
             }
 
+            // Repeat prefix present.
             if (rep > 0) {
-                int delta = 1;
-                if (getFlag(DF))
-                    delta *= -1;
-                if (w == 0b1)
-                    delta *= 2;
+                // Adjust SI/DI by delta.
+                int delta;
+                if (w == B) {
+                    if (!getFlag(DF))
+                        delta = 1;
+                    else
+                        delta = -1;
+                } else {
+                    if (!getFlag(DF))
+                        delta = 2;
+                    else
+                        delta = -2;
+                }
                 si += delta;
                 di += delta;
             }
         } while (rep > 0);
         return true;
-    }
-
-    /**
-     * Decrements an operand and sets flags accordingly.
-     *
-     * @param w
-     *            word/byte operation
-     * @param dst
-     *            the operand
-     * @return the result
-     */
-    private int dec(final int w, final int dst) {
-        final int res = dst - 1 & MASK[w];
-
-        setFlag(AF, ((res ^ dst ^ 1) & AF) > 0);
-        setFlag(OF, res == SIGN[w] - 1);
-        setFlags(w, res);
-
-        return res;
-    }
-
-    /**
-     * Decodes the second byte of the instruction and increments IP accordingly.
-     */
-    private void decode() {
-        mod = queue[1] >>> 6 & 0b11;
-        reg = queue[1] >>> 3 & 0b111;
-        rm  = queue[1]       & 0b111;
-
-        if (mod == 0b01)
-            // 8-bit displacement follows
-            ip += 2;
-        else if (mod == 0b00 && rm == 0b110 || mod == 0b10)
-            // 16-bit displacement follows
-            ip += 3;
-        else
-            // No displacement
-            ip += 1;
-    }
-
-    /**
-     * Execute all instructions.
-     */
-    public void execute() {
-        while (cycle()) {
-            for (int y = 0; y < 25; y++)
-                for (int x = 0; x < 80; x++) {
-                    final char c = (char) memory[0x8000 + y * 80 + x];
-                    System.out.print(c == 0 ? " " : c);
-                    if (x == 79)
-                        System.out.println("");
-                }
-        }
-    }
-
-    /**
-     * Gets the effective address of the operand.
-     *
-     * The Effective Address
-     *
-     * The offset that the EU calculates for a memory operands is called the
-     * operand's effective address or EA. It is an unsigned 16-bit number that
-     * expresses the operand's distance in bytes from the beginning of the
-     * segment in which it resides. The EU can calculate the effective address
-     * in different ways. Information encoded in the second byte of the
-     * instruction tells the EU how to calculate the operand. A compiler or
-     * assembler derives this information from the statement or instruction
-     * written by the programmer. Assembly language programmers have access to
-     * all addressing modes.
-     *
-     * The execution unit calculate the EA by summing a displacement, the
-     * content of a base register and the content of an index register. The
-     * fact that any combination of these three given components may be present
-     * in a given instruction gives rise to the variety of 8086 memory
-     * addressing modes.
-     *
-     * The displacement element is a 8- or 16-bit number that is contained in
-     * the instruction. The displacement generally is derived from the position
-     * of the operand name (a variable or label) in the program. It also is
-     * possible for a programmer to modify this value or to specify the
-     * displacement explicitly.
-     *
-     * A programmer may specify that either BX or BP is to serve as a base
-     * register whose content is to be used in the EA computation. Similarly,
-     * either SI or DI may be specified as in index register. Whereas the
-     * displacement value is a constant, the contents of the base and index
-     * registers may change during execution. This makes it possible for one
-     * instruction to access different memory locations as determined by the
-     * current values in the base and/or index registers.
-     *
-     * It takes time for the EU to calculate a memory operand's effective
-     * address. In general, the more elements in the calculation, the longer it
-     * takes.
-     *
-     * Direct Addressing
-     *
-     * Direct addressing is the simplest memory addressing mode. No registers
-     * are involved; the EA is take directly from the displacement field of the
-     * instruction. Direct addressing typically is used to access simple
-     * variables (scalars).
-     *
-     * Register Indirect Addressing
-     *
-     * The effective address of a memory operand may be taken directly from one
-     * of the base or index register. One instruction can operate on many
-     * different memory locations if the value in the base or index register is
-     * updated appropriately. The LEA (load effective address) and arithmetic
-     * instructions might be used to change the register value.
-     *
-     * Note that any 16-bit general register may be used for register indirect
-     * addressing with the JMP or CALL instructions.
-     *
-     * Based Addressing
-     *
-     * In based addressing, the effective address is the sum of displacement
-     * value and the content of register BX or register BP. Recall that
-     * specifying BP as a base register directs the BIU to obtain the operand
-     * from the current stack segment (unless a segment override prefix is
-     * present). This makes based addressing with BP a very convenient way to
-     * access stack data.
-     *
-     * Based addressing also provides a straightforward way to address
-     * structures which may be located at different places in memory. A base
-     * register can be pointed at the base of the structure and elements of the
-     * structure addressed by their displacement from the base. Different
-     * copies of the same structure can be accessed by simply changing the base
-     * register.
-     *
-     * Indexed Addressing
-     *
-     * In indexed addressing, the effective address is calculated from the sum
-     * of a displacement plus the content of an index register (SI or DI).
-     * Indexed addressing often is used to access elements in an array. The
-     * displacement locates the beginning of the array, and the value of the
-     * index register selects one element (the first element is selected if the
-     * index register contains 0). Since all array elements are the same
-     * length, simple arithmetic on the index register will select any element.
-     *
-     * Based Indexed Addressing
-     *
-     * Based indexed addressing generates an effective address that is the sum
-     * of a base register, an index register and a displacement. Based indexed
-     * addressing is a very flexible ode because two address components can be
-     * varied at execution time.
-     *
-     * Based indexed addressing provides a convenient way for a procedure to
-     * address an array allocated on a stack. Register BP can contain the
-     * offset of a reference point on the stack, typically the top of the stack
-     * after the procedure has saved registers and allocated local storage. The
-     * offset of the beginning of the array from the reference point can be
-     * expressed by a displacement value, and an index register can be used to
-     * access individual array elements.
-     *
-     * Arrays contained in structures and matrices (two-dimension arrays) also
-     * could be accessed with base indexed addressing.
-     *
-     * String Addressing
-     *
-     * String instructions do not use the normal memory addressing modes to
-     * access their operands. Instead, the index registers are used implicitly.
-     * When a string instruction is executed, SI is assumed to point to the
-     * first byte or word of the source string, and DI is assumed to point to
-     * the first byte or word of the destination string. In a repeated string
-     * operation, the CPU automatically adjusts SI and DI to obtain subsequent
-     * bytes or words.
-     *
-     * I/O Port Addressing
-     *
-     * If an I/O port is memory mapped, any of the memory operand addressing
-     * modes may be used to access the port. For example, a group of terminals
-     * can be accessed as an "array". String instructions also can be used to
-     * transfer data to memory-mapped ports with an appropriate hardware
-     * interface.
-     *
-     * Two different addressing modes can be used to access ports located in
-     * the I/O space. In direct port accessing, the port number is an 8-bit
-     * immediate operand. This allows fixed access to ports numbered 0-255.
-     * Indirect port addressing is similar to register indirect addressing of
-     * memory operands. The port number is taken from register DX and can range
-     * from 0 to 65,535. By previously adjusting the content of register DX,
-     * one instruction can access any port in the I/O space. A group of
-     * adjacent ports can be accessed using a simple software loop that adjusts
-     * the value in DX.
-     *
-     * @param mod
-     *            the mode field
-     * @param rm
-     *            the register/memory field
-     * @return the effective address
-     */
-    private int getEA(final int mod, final int rm) {
-        int disp = 0;
-        if (mod == 0b01)
-            // 8-bit displacement follows
-            disp = queue[2];
-        else if (mod == 0b10)
-            // 16-bit displacement follows
-            disp = queue[3] << 8 | queue[2];
-
-        int ea = 0;
-        switch (rm) {
-        case 0b000: // EA = (BX) + (SI) + DISP
-            ea = bh << 8 | bl + si + disp;
-            break;
-        case 0b001: // EA = (BX) + (DI) + DISP
-            ea = bh << 8 | bl + di + disp;
-            break;
-        case 0b010: // EA = (BP) + (SI) + DISP
-            ea = bp + si + disp;
-            break;
-        case 0b011: // EA = (BP) + (DI) + DISP
-            ea = bp + di + disp;
-            break;
-        case 0b100: // EA = (SI) + DISP
-            ea = si + disp;
-            break;
-        case 0b101: // EA = (DI) + DISP
-            ea = di + disp;
-            break;
-        case 0b110:
-            if (mod == 0b00) {
-                // Direct address
-                ea = queue[3] << 8 | queue[2];
-            } else
-                // EA = (BP) + DISP
-                ea = bp + disp;
-            break;
-        case 0b111: // EA = (BX) + DISP
-            ea = bh << 8 | bl + disp;
-            break;
-        }
-        return os << 4 | ea & 0xffff;
-    }
-
-    /**
-     * Gets the state of a flag.
-     *
-     * @param flag
-     *            the flag to check
-     * @return true if set, false if cleared
-     */
-    private boolean getFlag(final int flag) {
-        return (flags & flag) > 0;
-    }
-
-    /**
-     * Gets the value at the specified memory address.
-     *
-     * @param ip
-     *            the instruction pointer
-     * @return the value
-     */
-    private int getMem(final int ip) {
-        return getMem(cs, ip);
-    }
-
-    /**
-     * Gets the value at the specified memory address.
-     *
-     * @param seg
-     *            the segment
-     * @param addr
-     *            the address
-     * @return the value
-     */
-    private int getMem(final int seg, final int addr) {
-        return memory[(seg << 4 | addr) & 0xfffff];
-    }
-
-    /**
-     * Gets the value of the register.
-     *
-     * The REG (register) field identifies a register that is one of the
-     * instruction operands.
-     *
-     * @param w
-     *            word/byte operation
-     * @param reg
-     *            the register field
-     * @return the value
-     */
-    private int getReg(final int w, final int reg) {
-        if (w == 0b0)
-            // Byte data
-            switch (reg) {
-            case 0b000: // AL
-                return al;
-            case 0b001: // CL
-                return cl;
-            case 0b010: // DL
-                return dl;
-            case 0b011: // BL
-                return bl;
-            case 0b100: // AH
-                return ah;
-            case 0b101: // CH
-                return ch;
-            case 0b110: // DH
-                return dh;
-            case 0b111: // BH
-                return bh;
-            }
-        else
-            // Word data
-            switch (reg) {
-            case 0b000: // AX
-                return ah << 8 | al;
-            case 0b001: // CX
-                return ch << 8 | cl;
-            case 0b010: // DX
-                return dh << 8 | dl;
-            case 0b011: // BX
-                return bh << 8 | bl;
-            case 0b100: // SP
-                return sp;
-            case 0b101: // BP
-                return bp;
-            case 0b110: // SI
-                return si;
-            case 0b111: // DI
-                return di;
-            }
-        return 0;
-    }
-
-    /**
-     * Gets the value of the register/memory.
-     *
-     * The MOD (mode) field indicates whether one of the operands is in memory
-     * or whether both operands are registers. The encoding of the R/M
-     * (register/memory) field depends on how the mode field is set.
-     *
-     * If MOD = 11 (register-to-register mode), then R/M identifies the second
-     * register operand.
-     * If MOD selects memory mode, then R/M indicates how the effective address
-     * of the memory operand is to be calculated.
-     *
-     * @param w
-     *            word/byte instruction
-     * @param mod
-     *            the mode field
-     * @param rm
-     *            the register/memory field
-     * @return the value
-     */
-    private int getRM(final int w, final int mod, final int rm) {
-        if (mod == 0b11)
-            // Register-to-register mode
-            return getReg(w, rm);
-        else {
-            // Memory mode
-            final int ea = getEA(mod, rm);
-            if (w == 0b0)
-                // Byte data
-                return memory[ea];
-            else
-                // Word data
-                return memory[ea + 1] << 8 | memory[ea];
-        }
-    }
-
-    /**
-     * Gets the value of the segment register.
-     *
-     * The REG (register) field identifies a register that is one of the
-     * instruction operands.
-     *
-     * @param reg
-     *            the register field
-     * @return the value
-     */
-    private int getSegReg(final int reg) {
-        switch (reg) {
-        case 0b00:
-            return es;
-        case 0b01:
-            return cs;
-        case 0b10:
-            return ss;
-        case 0b11:
-            return ds;
-        }
-        return 0;
-    }
-
-    /**
-     * Increments an operand and sets flags accordingly.
-     *
-     * @param w
-     *            word/byte operation
-     * @param dst
-     *            the operand
-     * @return the result
-     */
-    private int inc(final int w, final int dst) {
-        final int res = dst + 1 & MASK[w];
-
-        setFlag(AF, ((res ^ dst ^ 1) & AF) > 0);
-        setFlag(OF, res == SIGN[w]);
-        setFlags(w, res);
-
-        return res;
-    }
-
-    /**
-     * Loads a binary file into memory at the specified address.
-     *
-     * @param bin
-     *            the binary file
-     */
-    public void load(final int[] bin) {
-        for (int i = 0; i < bin.length; i++)
-            memory[i] = bin[i] & 0xff;
-    }
-
-    /**
-     * Sets flags according to the result of a logical operation.
-     *
-     * @param w
-     *            word/byte operation
-     * @param res
-     *            the result
-     */
-    private void logic(final int w, final int res) {
-        setFlag(CF, false);
-        setFlag(OF, false);
-        setFlags(w, res);
-    }
-
-    /**
-     * Pops a value at the top of the stack.
-     *
-     * @return the value
-     */
-    private int pop() {
-        final int val = getMem(ss, sp + 1) << 8 | getMem(ss, sp);
-        sp += 2;
-        return val;
-    }
-
-    /**
-     * Pushes a value to the top of the stack.
-     *
-     * @param val
-     *            the value
-     */
-    private void push(final int val) {
-        sp -= 2;
-        setMem(ss, sp, val & 0xff);
-        setMem(ss, sp + 1, val >>> 8 & 0xff);
-    }
-
-    /**
-     * Resets the CPU to its default state.
-     */
-    public void reset() {
-        flags = 0;
-        ip = 0x0000;
-        sp = 0x0100;
-        //cs = 0xffff;
-        ds = 0x0000;
-        ss = 0x0000;
-        es = 0x0000;
-        for (int i = 0; i < 6; i++)
-            queue[i] = 0;
-    }
-
-    /**
-     * Performs subtraction with borrow and sets flags accordingly.
-     *
-     * @param w
-     *            word/byte operation
-     * @param dst
-     *            the first operand
-     * @param src
-     *            the second operand
-     * @return the result
-     */
-    private int sbb(final int w, final int dst, final int src) {
-        final int carry = (flags & CF) == CF ? 1 : 0;
-        final int res = dst - src - carry & MASK[w];
-
-        setFlag(CF, carry > 0 ? dst <= src : dst < src);
-        setFlag(AF, ((res ^ dst ^ src) & AF) > 0);
-        setFlag(OF, (shift((dst ^ src) & (dst ^ res), 12 - BITS[w]) & OF) > 0);
-        setFlags(w, res);
-
-        return res;
-    }
-
-    /**
-     * Sets or clears a flag.
-     *
-     * @param flag
-     *            the flag to affect
-     * @param set
-     *            true to set, false to clear
-     */
-    private void setFlag(final int flag, final boolean set) {
-        if (set)
-            flags |= flag;
-        else
-            flags &= ~flag;
-    }
-
-    /**
-     * Sets the parity, zero and sign flags.
-     *
-     * @param w
-     *            word/byte operation
-     * @param res
-     *            the result
-     */
-    private void setFlags(final int w, final int res) {
-        setFlag(PF, PARITY[res & 0xff] > 0);
-        setFlag(ZF, res == 0);
-        setFlag(SF, (shift(res, 8 - BITS[w]) & SF) > 0);
-    }
-
-    /**
-     * Sets the value at the specified memory address.
-     *
-     * @param seg
-     *            the segment
-     * @param addr
-     *            the address
-     * @param val
-     *            the new value
-     */
-    private void setMem(final int seg, final int addr, final int val) {
-        memory[(seg << 4 | addr) & 0xfffff] = val;
-    }
-
-    /**
-     * Sets the value of the register.
-     *
-     * The REG (register) field identifies a register that is one of the
-     * instruction operands.
-     *
-     * @param w
-     *            word/byte operation
-     * @param reg
-     *            the register field
-     * @param val
-     *            the new value
-     */
-    private void setReg(final int w, final int reg, final int val) {
-        if (w == 0b0)
-            // Byte data
-            switch (reg) {
-            case 0b000: // AL
-                al = val & 0xff;
-                break;
-            case 0b001: // CL
-                cl = val & 0xff;
-                break;
-            case 0b010: // DL
-                dl = val & 0xff;
-                break;
-            case 0b011: // BL
-                bl = val & 0xff;
-                break;
-            case 0b100: // AH
-                ah = val & 0xff;
-                break;
-            case 0b101: // CH
-                ch = val & 0xff;
-                break;
-            case 0b110: // DH
-                dh = val & 0xff;
-                break;
-            case 0b111: // BH
-                bh = val & 0xff;
-                break;
-            }
-        else
-            // Word data
-            switch (reg) {
-            case 0b000: // AX
-                al = val & 0xff;
-                ah = val >>> 8 & 0xff;
-                break;
-            case 0b001: // CX
-                cl = val & 0xff;
-                ch = val >>> 8 & 0xff;
-                break;
-            case 0b010: // DX
-                dl = val & 0xff;
-                dh = val >>> 8 & 0xff;
-                break;
-            case 0b011: // BX
-                bl = val & 0xff;
-                bh = val >>> 8 & 0xff;
-                break;
-            case 0b100: // SP
-                sp = val & 0xffff;
-                break;
-            case 0b101: // BP
-                bp = val & 0xffff;
-                break;
-            case 0b110: // SI
-                si = val & 0xffff;
-                break;
-            case 0b111: // DI
-                di = val & 0xffff;
-                break;
-            }
-    }
-
-    /**
-     * Sets the value of the register/memory.
-     *
-     * The MOD (mode) field indicates whether one of the operands is in memory
-     * or whether both operands are registers. The encoding of the R/M
-     * (register/memory) field depends on how the mode field is set.
-     *
-     * If MOD = 11 (register-to-register mode), then R/M identifies the second
-     * register operand.
-     * If MOD selects memory mode, then R/M indicates how the effective address
-     * of the memory operand is to be calculated.
-     *
-     * @param w
-     *            word/byte instruction
-     * @param mod
-     *            the mode field
-     * @param rm
-     *            the register/memory field
-     * @param val
-     *            the new value
-     */
-    private void setRM(final int w, final int mod, final int rm, final int val) {
-        if (mod == 0b11)
-            // Register-to-register mode
-            setReg(w, rm, val);
-        else {
-            // Memory mode
-            final int ea = getEA(mod, rm);
-            if (w == 0b0)
-                // Byte data
-                memory[ea] = val & 0xff;
-            else {
-                // Word data
-                memory[ea] = val & 0xff;
-                memory[ea + 1] = val >>> 8 & 0xff;
-            }
-        }
-    }
-
-    /**
-     * Sets the value of the segment register.
-     *
-     * The REG (register) field identifies a register that is one of the
-     * instruction operands.
-     *
-     * @param reg
-     *            the register field
-     * @param val
-     *            the new value
-     */
-    private void setSegReg(final int reg, final int val) {
-        switch (reg) {
-        case 0b00:
-            es = val & 0xffff;
-            break;
-        case 0b01:
-            cs = val & 0xffff;
-            break;
-        case 0b10:
-            ss = val & 0xffff;
-            break;
-        case 0b11:
-            ds = val & 0xffff;
-            break;
-        }
-    }
-
-    /**
-     * Performs subtraction and sets flags accordingly.
-     *
-     * @param w
-     *            word/byte operation
-     * @param dst
-     *            the first operand
-     * @param src
-     *            the second operand
-     * @return the result
-     */
-    private int sub(final int w, final int dst, final int src) {
-        final int res = dst - src & MASK[w];
-
-        setFlag(CF, dst < src);
-        setFlag(AF, ((res ^ dst ^ src) & AF) > 0);
-        setFlag(OF, (shift((dst ^ src) & (dst ^ res), 12 - BITS[w]) & OF) > 0);
-        setFlags(w, res);
-
-        return res;
     }
 }
