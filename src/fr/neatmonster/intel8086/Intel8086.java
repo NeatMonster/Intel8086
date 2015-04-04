@@ -56,13 +56,13 @@ public class Intel8086 {
         cpu.reset();
         try {
             // Try reading test file.
-            final byte[] bs = Files.readAllBytes(Paths.get("codegolf"));
+            final byte[] src = Files.readAllBytes(Paths.get("codegolf"));
             // Convert bytes to integers.
-            final int[] bin = new int[bs.length];
-            for (int i = 0; i < bs.length; ++i)
-                bin[i] = bs[i];
+            final int[] instrs = new int[src.length];
+            for (int i = 0; i < src.length; ++i)
+                instrs[i] = src[i];
             // Load instructions.
-            cpu.load(bin);
+            cpu.load(instrs);
             // Execute all instructions.
             cpu.run();
         } catch (final IOException e) {
@@ -3365,8 +3365,18 @@ public class Intel8086 {
              * other flags. It (and CMC and STC) is useful in conjunction with
              * the RCL and RCR instructions.
              */
-            case 0xf8:
+            case 0xf8: // CLC
                 setFlag(CF, false);
+                break;
+
+            /*
+             * CMC
+             *
+             * CMC (Complement Carry flag) "toggles" CF to its opposite state
+             * and affects no other flags.
+             */
+            case 0xf5: // CMC
+                setFlag(CF, !getFlag(CF));
                 break;
 
             /*
@@ -3374,8 +3384,57 @@ public class Intel8086 {
              *
              * STC (Set Carry flag) sets CF to 1 and affects no other flags.
              */
-            case 0xf9:
+            case 0xf9: // STC
                 setFlag(CF, true);
+                break;
+
+            /*
+             * CLD
+             *
+             * CLD (Clear Direction flag) zeroes DF causing the string
+             * instructions to auto-increment the SI and/or DI index registers.
+             * CLD does not affect any other flags.
+             */
+            case 0xfc: // CLD
+                setFlag(DF, false);
+                break;
+
+            /*
+             * STD
+             *
+             * STD (Set Direction flag) sets DF to 1 causing the string
+             * instructions to auto-decrement the SI and/or DI index registers.
+             * STD does not affect any other flags.
+             */
+            case 0xfd: // STD
+                setFlag(DF, true);
+                break;
+
+            /*
+             * CLI
+             *
+             * CLI (Clear Interrupt-enable flag) zeroes IF. When the interrupt-
+             * enable flag is cleared, the 8086 and 8088 do not recognize an
+             * external interrupt request that appears on the INTR line; in
+             * other words maskable interrupts are disabled. A non-maskable
+             * interrupt appearing on the NMI line, however, is honored, as is a
+             * software interrupt. CLI does not affect any other flags.
+             */
+            case 0xfa: // CLI
+                setFlag(IF, false);
+                break;
+
+            /*
+             * STI
+             *
+             * STI (Set Interrupt-enable flag) sets IF to 1, enabling processor
+             * recognition of maskable interrupt requests appearing on the INTR
+             * line. Note however, that a pending interrupt will not actually be
+             * recognized until the instruction following STI has executed. STI
+             * does not affect any other flags.
+             */
+            case 0xfb: // STI
+                setFlag(IF, true);
                 break;
 
             /*
@@ -3394,6 +3453,50 @@ public class Intel8086 {
              */
             case 0xf4: // HLT
                 return false;
+
+            /*
+             * WAIT
+             *
+             * WAIT causes the CPU to enter the wait state while its /TEST line
+             * is not active. WAIT does not affect any flags.
+             */
+            case 0x9b: // WAIT
+                break;
+
+            /*
+             * ESC external-opcode, source
+             *
+             * ESC (Escape) provides a means for an external processor to obtain
+             * an opcode and possibly a memory operand from the 8086. The
+             * external opcode is a 6-bit immediate constant that the assembler
+             * encodes in the machine instruction it builds. An external
+             * processor may monitor the system bus and capture this opcode when
+             * the ESC is fetched. If the source operand is a register, the
+             * processor does nothing. If the source operand is a memory
+             * variable, the processor obtains the operand from memory and
+             * discards it. An external processor may capture the memory operand
+             * when the processor reads it from memory.
+             */
+            case 0xd8: // ESC OPCODE,SOURCE
+            case 0xd9: // ESC OPCODE,SOURCE
+            case 0xda: // ESC OPCODE,SOURCE
+            case 0xdb: // ESC OPCODE,SOURCE
+            case 0xdc: // ESC OPCODE,SOURCE
+            case 0xdd: // ESC OPCODE,SOURCE
+            case 0xde: // ESC OPCODE,SOURCE
+            case 0xdf: // ESC OPCODE,SOURCE
+                decode();
+                break;
+
+            /*
+             * LOCK
+             *
+             * LOCK is a one-byte prefix that causes the 8086 (configured in
+             * maximum mode) to assert its bus /LOCK signal while the following
+             * instruction executes. LOCK does not affect any flags.
+             */
+            case 0xf0: // LOCK
+                break;
 
             /*
              * No Operation
