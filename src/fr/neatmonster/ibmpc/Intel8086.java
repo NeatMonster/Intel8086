@@ -1,4 +1,4 @@
-package fr.neatmonster.intel8086;
+package fr.neatmonster.ibmpc;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -55,14 +55,8 @@ public class Intel8086 {
         // Reset the CPU.
         cpu.reset();
         try {
-            // Try reading test file.
-            final byte[] src = Files.readAllBytes(Paths.get("codegolf"));
-            // Convert bytes to integers.
-            final int[] instrs = new int[src.length];
-            for (int i = 0; i < src.length; ++i)
-                instrs[i] = src[i];
-            // Load instructions.
-            cpu.load(instrs);
+            // Try loading the bios.
+            cpu.load(0xfe000, "bios.bin");
             // Execute all instructions.
             cpu.run();
         } catch (final IOException e) {
@@ -601,6 +595,16 @@ public class Intel8086 {
     private final int[]        memory = new int[0x100000];
 
     /*
+     * External Components
+     */
+    /**
+     * Intel 8253 - Programmable Interval Timer
+     *
+     * @see fr.neatmonster.ibmpc.Intel8253
+     */
+    private final Intel8253    timer  = new Intel8253();
+
+    /*
      * Typical 8086 Machine Instruction Format
      *
      * |     BYTE 1     |     BYTE 2      |     BYTE 3    |     BYTE 4     |  BYTE 5  |  BYTE 6   |
@@ -1063,14 +1067,34 @@ public class Intel8086 {
     }
 
     /**
+     * Calls an interrupt given its type.
+     *
+     * @param type
+     *            the interrupt-type
+     */
+    private void intcall(final int type) {
+        push(flags);
+        setFlag(IF, false);
+        setFlag(TF, false);
+        push(cs);
+        push(ip);
+        ip = getMem(0b1, type * 4);
+        cs = getMem(0b1, type * 4 + 2);
+    }
+
+    /**
      * Loads a binary file into memory at the specified address.
      *
-     * @param bin
-     *            the binary file
+     * @param addr
+     *            the address
+     * @param path
+     *            the file path
+     * @throws IOException
      */
-    public void load(final int[] bin) {
+    public void load(final int addr, final String path) throws IOException {
+        final byte[] bin = Files.readAllBytes(Paths.get(path));
         for (int i = 0; i < bin.length; i++)
-            memory[i] = bin[i] & 0xff;
+            memory[addr + i] = bin[i] & 0xff;
     }
 
     /**
@@ -1099,6 +1123,38 @@ public class Intel8086 {
     }
 
     /**
+     * Reads input from the specified port.
+     *
+     * @param w
+     *            word/byte operation
+     * @param port
+     *            the port
+     * @return the value
+     */
+    private int portIn(final int w, final int port) {
+        // Intel 8253
+        if (port >= 0x40 && port < 0x44)
+            return timer.portIn(w, port);
+        return MASK[w];
+    }
+
+    /**
+     * Write output to the specified port.
+     *
+     * @param w
+     *            word/byte operation
+     * @param port
+     *            the port
+     * @param val
+     *            the value
+     */
+    private void portOut(final int w, final int port, final int val) {
+        // Intel 8253
+        if (port >= 0x40 && port < 0x44)
+            timer.portOut(w, port, val);
+    }
+
+    /**
      * Pushes a value to the top of the stack.
      *
      * @param val
@@ -1115,8 +1171,7 @@ public class Intel8086 {
     public void reset() {
         flags = 0;
         ip = 0x0000;
-        sp = 0x0100;
-        //cs = 0xffff;
+        cs = 0xffff;
         ds = 0x0000;
         ss = 0x0000;
         es = 0x0000;
@@ -1128,16 +1183,7 @@ public class Intel8086 {
      * Execute all instructions.
      */
     public void run() {
-        while (tick()) {
-            //TODO Replace by the real text mode.
-            for (int y = 0; y < 25; y++)
-                for (int x = 0; x < 80; x++) {
-                    final char c = (char) memory[0x8000 + y * 80 + x];
-                    System.out.print(c == 0 ? " " : c);
-                    if (x == 79)
-                        System.out.println("");
-                }
-        }
+        while (tick());
     }
 
     /**
@@ -1512,15 +1558,15 @@ public class Intel8086 {
                 break;
 
             // Register/Memory to/from Segment Register
-            case 0x8e: // MOV SEGREG,REG16/MEM16
             case 0x8c: // MOV REG16/MEM16,SEGREG
+            case 0x8e: // MOV SEGREG,REG16/MEM16
                 decode();
                 if (d == 0b0) {
-                    src = getRM(W, mod, rm);
-                    setSegReg(reg, src);
-                } else {
                     src = getSegReg(reg);
                     setRM(W, mod, rm, src);
+                } else {
+                    src = getRM(W, mod, rm);
+                    setSegReg(reg, src);
                 }
                 break;
 
@@ -1639,6 +1685,52 @@ public class Intel8086 {
              */
             case 0xd7: // XLAT SOURCE-TABLE
                 al = getMem(B, getAddr(os, getReg(W, BX) + al));
+                break;
+
+            /*
+             * IN accumulator,port
+             *
+             * IN transfers a byte or a word from an input port to the AL
+             * register or the AX register, respectively. The port number may be
+             * specified either with an immediate byte constant, allowing access
+             * to ports numbered 0 through 255, or with a number previously
+             * placed in the DX register, allowing variable access (by changing
+             * the value in DX) to ports numbered from 0 through 65,535.
+             */
+            // Variable Port
+            case 0xe4: // IN AL,IMMED8
+            case 0xe5: // IN AX,IMMED8
+                src = getMem(B);
+                setReg(w, AX, portIn(w, src));
+                break;
+            // Fixed Port
+            case 0xec: // IN AL,DX
+            case 0xed: // IN AX,DX
+                src = getReg(W, DX);
+                setReg(w, AX, portIn(w, src));
+                break;
+
+            /*
+             * OUT port,accumulator
+             *
+             * OUT transfers a byte or a word from the AL register or the AX
+             * register, respectively, to an output port. The port number may be
+             * specified either with an immediate byte constant, allowing access
+             * to ports numbered 0 through 255, or with a number previously
+             * placed in register DX, allowing variable access (by changing the
+             * value in DX) to ports numbered from 0 through 65,535.
+             */
+            // Variable Port
+            case 0xe6: // OUT AL,IMMED8
+            case 0xe7: // OUT AX,IMMED8
+                src = getMem(B);
+                portOut(w, src, getReg(w, AX));
+                break;
+            // Fixed Port
+            case 0xee: // OUT AL,DX
+            case 0xef: // OUT AX,DX
+                src = getReg(W, DX);
+                portOut(w, src, getReg(w, AX));
                 break;
 
             /*
@@ -3343,6 +3435,80 @@ public class Intel8086 {
                 dst = signconv(B, dst);
                 if (getReg(W, CX) == 0)
                     ip += dst;
+                break;
+
+            /*
+             * Interrupt Instructions
+             *
+             * The interrupt instructions allow interrupt service routines to be
+             * activated by programs as well as by external hardware devices.
+             * The effect of software interrupts is similar to hardware-
+             * initiated interrupts. However, the processor does not execute an
+             * interrupt acknowledge bus cycle if the interrupt originates in
+             * software or with an NMI. The effect of the interrupt instructions
+             * on the flags is covered in the description of each instruction.
+             */
+            /*
+             * INT interrupt-type
+             *
+             * INT (Interrupt) activates the interrupt procedure specified by
+             * the interrupt-type operand. INT decrements the stack pointer by
+             * two, pushes the flags onto the stack, and clears the trap (TF)
+             * and interrupt-enable (IF) flags to disable single-step and
+             * maskable interrupts. The flags are stored in the format used by
+             * the PUSHF instruction. SP is decremented again by two, and the CS
+             * register is pushed onto the stack. The address of the interrupt
+             * pointer is calculated by multiplying interrupt-type by four; the
+             * second word of the interrupt pointer replaces CS. SP again is
+             * decremented by two, and IP is pushed onto the stack and is
+             * replaced by the first word of the interrupt pointer. If
+             * interrupt-type = 3, the assembler generates a short (1 byte) form
+             * of the instruction, known as the breakpoint interrupt.
+             *
+             * Software interrupts can be used as "supervisor calls," i.e.,
+             * requests for service from an operating system. A different
+             * interrupt-type can be used for each type of service that the
+             * operating system could supply for an application program.
+             * Software interrupts also may be used to check out interrupt
+             * service procedures written for hardware-initiated interrupts.
+             */
+            // Type 3
+            case 0xcc: // INT 3
+            // Type Specified
+            case 0xcd: // INT IMMED8
+                intcall(op == 0xcc ? 3 : getMem(B));
+                break;
+
+            /*
+             * INTO
+             *
+             * INTO (Interrupt on Overflow) generates a software interrupt if
+             * the overflow flag (OF) is set; otherwise control proceeds to the
+             * following instruction without activating an interrupt procedure.
+             * INTO addresses the target interrupt procedure (its type is 4)
+             * through the interrupt pointer at location 1OH; it clears the TF
+             * and IF flags and otherwise operates like INT. INTO may be written
+             * following an arithmetic or logical operation to activate an
+             * interrupt procedure if overflow occurs.
+             */
+            case 0xce: // INTO
+                if (getFlag(OF))
+                    intcall(4);
+                break;
+
+            /*
+             * IRET
+             *
+             * IRET (Interrupt Return) transfers control back to the point of
+             * interruption by popping IP, CS and the flags from the stack. IRET
+             * thus affects all flags by restoring them to previously saved
+             * values. IRET is used to exit any interrupt procedure, whether
+             * activated by hardware or software.
+             */
+            case 0xcf: // IRET
+                ip = pop();
+                cs = pop();
+                flags = pop();
                 break;
 
             /*
