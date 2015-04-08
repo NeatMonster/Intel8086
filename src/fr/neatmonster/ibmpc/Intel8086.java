@@ -598,11 +598,32 @@ public class Intel8086 {
      * External Components
      */
     /**
+     * Intel 8237 - Direct Memory Access Controller
+     *
+     * @see fr.neatmonster.ibmpc.Intel8237
+     */
+    private final Intel8237    dma    = new Intel8237();
+
+    /**
      * Intel 8253 - Programmable Interval Timer
      *
      * @see fr.neatmonster.ibmpc.Intel8253
      */
-    private final Intel8253    timer  = new Intel8253();
+    private final Intel8253    pit    = new Intel8253();
+
+    /**
+     * Intel 8255 - Programmable Peripheral Interface
+     *
+     * @see fr.neatmonster.ibmpc.Intel8255
+     */
+    private final Intel8255    ppi    = new Intel8255();
+
+    /**
+     * Intel 8259 - Programmable Interrupt Controller
+     *
+     * @see fr.neatmonster.ibmpc.Intel8259
+     */
+    private final Intel8259    pic    = new Intel8259();
 
     /*
      * Typical 8086 Machine Instruction Format
@@ -1132,10 +1153,19 @@ public class Intel8086 {
      * @return the value
      */
     private int portIn(final int w, final int port) {
+        // Intel 8237
+        if (port >= 0x00 && port < 0x20)
+            return dma.portIn(w, port);
         // Intel 8253
         if (port >= 0x40 && port < 0x44)
-            return timer.portIn(w, port);
-        return MASK[w];
+            return pit.portIn(w, port);
+        // Intel 8255
+        if (port >= 0x60 && port < 0x64)
+            return ppi.portIn(w, port);
+        // Intel 8259
+        if (port == 0x20 || port == 0x21)
+            return pic.portIn(w,  port);
+        return 0;
     }
 
     /**
@@ -1149,9 +1179,18 @@ public class Intel8086 {
      *            the value
      */
     private void portOut(final int w, final int port, final int val) {
+        // Intel 8237
+        if (port >= 0x00 && port < 0x20)
+            dma.portOut(w, port, val);
         // Intel 8253
         if (port >= 0x40 && port < 0x44)
-            timer.portOut(w, port, val);
+            pit.portOut(w, port, val);
+        // Intel 8255
+        if (port >= 0x60 && port < 0x64)
+            ppi.portOut(w, port, val);
+        // Intel 8259
+        if (port == 0x20 || port == 0x21)
+            pic.portOut(w, port, val);
     }
 
     /**
@@ -1183,7 +1222,9 @@ public class Intel8086 {
      * Execute all instructions.
      */
     public void run() {
+        pit.launch();
         while (tick());
+        pit.interrupt();
     }
 
     /**
@@ -2347,10 +2388,12 @@ public class Intel8086 {
             case 0xd4: // AAM
                 src = getMem(B);
                 if (src == 0)
-                    break; //TODO Generate a type 0 interrupt.
-                ah = al / src & 0xff;
-                al = al % src & 0xff;
-                setFlags(W, getReg(W, AX));
+                    intcall(0);
+                else {
+                    ah = al / src & 0xff;
+                    al = al % src & 0xff;
+                    setFlags(W, getReg(W, AX));
+                }
                 break;
 
             /*
@@ -2856,6 +2899,8 @@ public class Intel8086 {
             case 0xa5: // MOVS DEST-STR16,SRC-STR16
                 src = getMem(w, getAddr(os, si));
                 setMem(w, getAddr(es, di), src);
+                si = si + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
+                di = di + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
                 break;
 
             /*
@@ -2881,6 +2926,8 @@ public class Intel8086 {
                 dst = getMem(w, getAddr(es, di));
                 src = getMem(w, getAddr(os, si));
                 sub(w, src, dst);
+                si = si + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
+                di = di + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
                 if (rep == 1 && !getFlag(ZF) || rep == 2 && getFlag(ZF))
                     rep = 0;
                 break;
@@ -2908,6 +2955,7 @@ public class Intel8086 {
                 dst = getMem(w, getAddr(es, di));
                 src = getReg(w, AX);
                 sub(w, src, dst);
+                di = di + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
                 if (rep == 1 && !getFlag(ZF) || rep == 2 && getFlag(ZF))
                     rep = 0;
                 break;
@@ -2928,6 +2976,7 @@ public class Intel8086 {
             case 0xad: // LODS SRC-STR16
                 src = getMem(w, getAddr(os, si));
                 setReg(w, AX, src);
+                si = si + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
                 break;
 
             /*
@@ -2943,6 +2992,7 @@ public class Intel8086 {
             case 0xab: // STOS DEST-STR16
                 src = getReg(w, AX);
                 setMem(w, getAddr(es, di), src);
+                di = di + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
                 break;
 
             /*
@@ -3380,7 +3430,7 @@ public class Intel8086 {
             case 0xe2: // LOOP SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                src = getReg(W, CX) - 1;
+                src = getReg(W, CX) - 1 & 0xffff;
                 setReg(W, CX, src);
                 if (src != 0)
                     ip += dst;
@@ -3398,7 +3448,7 @@ public class Intel8086 {
             case 0xe1: // LOOPE/LOOPZ SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                src = getReg(W, CX) - 1;
+                src = getReg(W, CX) - 1 & 0xffff;
                 setReg(W, CX, src);
                 if (src != 0 && getFlag(ZF))
                     ip += dst;
@@ -3416,7 +3466,7 @@ public class Intel8086 {
             case 0xe0: // LOOPNE/LOOPNZ SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                src = getReg(W, CX) - 1;
+                src = getReg(W, CX) - 1 & 0xffff;
                 setReg(W, CX, src);
                 if (src != 0 && !getFlag(ZF))
                     ip += dst;
@@ -3999,12 +4049,12 @@ public class Intel8086 {
                     break;
                 case 0b110: // DIV
                     if (src == 0)
-                        break; //TODO Generate a type 0 interrupt.
-                    if (w == B) {
+                        intcall(0);
+                    else if (w == B) {
                         dst = ah << 8 | al;
                         res = dst / src & 0xffff;
                         if (res > 0xff)
-                            break; //TODO Generate a type 0 interrupt.
+                            intcall(0);
                         else {
                             al = res & 0xff;
                             ah = dst % src & 0xff;
@@ -4013,7 +4063,7 @@ public class Intel8086 {
                         final long ldst = (long) getReg(W, DX) << 16 | getReg(W, AX);
                         long lres = ldst / src & 0xffffffff;
                         if (lres > 0xffff)
-                            break; //TODO Generate a type 0 interrupt.
+                            intcall(0);
                         else {
                             setReg(W, AX, (int) lres);
                             lres = ldst % src & 0xffff;
@@ -4023,14 +4073,14 @@ public class Intel8086 {
                     break;
                 case 0b111: // IDIV
                     if (src == 0)
-                        break; //TODO Generate a type 0 interrupt.
-                    if (w == B) {
+                        intcall(0);
+                    else if (w == B) {
                         src = signconv(B, src);
                         dst = getReg(W, AX);
                         dst = signconv(W, dst);
                         res = dst / src & 0xffff;
                         if (res > 0x007f && res < 0xff81)
-                            break; //TODO Generate a type 0 interrupt.
+                            intcall(0);
                         else {
                             al = res & 0xff;
                             ah = dst % src & 0xff;
@@ -4042,7 +4092,7 @@ public class Intel8086 {
                         ldst = ldst << 32 >> 32;
                         long lres = ldst / src & 0xffffffff;
                         if (lres > 0x00007fff | lres < 0xffff8000)
-                            break; //TODO Generate a type 0 interrupt.
+                            intcall(0);
                         else {
                             setReg(W, AX, (int) lres);
                             lres = ldst % src & 0xffff;
@@ -4119,25 +4169,6 @@ public class Intel8086 {
                     break;
                 }
                 break;
-            }
-
-            // Repeat prefix present.
-            if (rep > 0) {
-                // Adjust SI/DI by delta.
-                int delta;
-                if (w == B) {
-                    if (!getFlag(DF))
-                        delta = 1;
-                    else
-                        delta = -1;
-                } else {
-                    if (!getFlag(DF))
-                        delta = 2;
-                    else
-                        delta = -2;
-                }
-                si += delta;
-                di += delta;
             }
         } while (rep > 0);
         return true;

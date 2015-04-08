@@ -36,6 +36,8 @@ package fr.neatmonster.ibmpc;
 public class Intel8253 extends Thread {
     /** The last time counters were updated. */
     private long               last    = System.nanoTime();
+    /** Should the Java thread stop? */
+    private boolean            running = false;
 
     /** The actual value of each counter. */
     private volatile int[]     count   = new int[] { -1, -1, -1 };
@@ -49,10 +51,19 @@ public class Intel8253 extends Thread {
     private volatile boolean[] toggle  = new boolean[3];
 
     /**
-     * Instantiates and starts the thread.
+     * Interrupts the Java thread.
      */
-    public Intel8253() {
-        start();
+    @Override
+    public void interrupt() {
+        running = false;
+    }
+
+    /**
+     * Launches the Java thread.
+     */
+    public void launch() {
+        running = true;
+        super.start();
     }
 
     /**
@@ -156,7 +167,7 @@ public class Intel8253 extends Thread {
     @Override
     public void run() {
         long time;
-        while (true) {
+        while (running) {
             time = System.nanoTime();
             // 1.193182 MHz - 838 ns
             if (time - last >= 838) {
@@ -176,19 +187,19 @@ public class Intel8253 extends Thread {
                 case 0b10:
                     /*
                      * Mode 2: Rate Generator
-                     * 
+                     *
                      * Divide by N counter. The output will be low for one
                      * period of the input clock. The period from one output
                      * pulse to the next equals the number of input counter in
                      * the count register. If the count register is reloaded
                      * between pulses the present period will not be affected,
                      * but the subsequent period will reflect the new value.
-                     * 
+                     *
                      * The gate input, when low, will force the output high.
                      * When the gate input goes high, the counter will start
                      * from the initial count. This, the gate input can be used
                      * to synchronize the counter.
-                     * 
+                     *
                      * When this mode is set; the output will remain high until
                      * after the count register is loaded. The output can also
                      * be synchronized by software.
