@@ -598,32 +598,32 @@ public class Intel8086 {
      * External Components
      */
     /**
-     * Intel 8237 - Direct Memory Access Controller
+     * Intel 8259 - Programmable Interrupt Controller
      *
-     * @see fr.neatmonster.ibmpc.Intel8237
+     * @see fr.neatmonster.ibmpc.Intel8259
      */
-    private final Intel8237    dma    = new Intel8237();
-
-    /**
-     * Intel 8253 - Programmable Interval Timer
-     *
-     * @see fr.neatmonster.ibmpc.Intel8253
-     */
-    private final Intel8253    pit    = new Intel8253();
+    public final Intel8259     pic    = new Intel8259();
 
     /**
      * Intel 8255 - Programmable Peripheral Interface
      *
      * @see fr.neatmonster.ibmpc.Intel8255
      */
-    private final Intel8255    ppi    = new Intel8255();
+    public final Intel8255     ppi    = new Intel8255();
 
     /**
-     * Intel 8259 - Programmable Interrupt Controller
+     * Intel 8253 - Programmable Interval Timer
      *
-     * @see fr.neatmonster.ibmpc.Intel8259
+     * @see fr.neatmonster.ibmpc.Intel8253
      */
-    private final Intel8259    pic    = new Intel8259();
+    public final Intel8253     pit    = new Intel8253(pic);
+
+    /**
+     * Intel 8237 - Direct Memory Access Controller
+     *
+     * @see fr.neatmonster.ibmpc.Intel8237
+     */
+    public final Intel8237     dma    = new Intel8237();
 
     /*
      * Typical 8086 Machine Instruction Format
@@ -643,6 +643,12 @@ public class Intel8086 {
     private int                reg;
     /** Register operand/Registers to use in EA calculation */
     private int                rm;
+
+    /** Store Effective Address to void recalculating it. */
+    private int                ea;
+
+    /** Count clock cycles for a more accurate emulation. */
+    private long               clocks;
 
     /**
      * Performs addition with carry and sets flags accordingly.
@@ -687,6 +693,22 @@ public class Intel8086 {
         setFlags(w, res);
 
         return res;
+    }
+
+    /**
+     * Calls an interrupt given its type.
+     *
+     * @param type
+     *            the interrupt-type
+     */
+    private void callInt(final int type) {
+        push(flags);
+        setFlag(IF, false);
+        setFlag(TF, false);
+        push(cs);
+        push(ip);
+        ip = getMem(0b1, type * 4);
+        cs = getMem(0b1, type * 4 + 2);
     }
 
     /**
@@ -877,42 +899,55 @@ public class Intel8086 {
      */
     private int getEA(final int mod, final int rm) {
         int disp = 0;
-        if (mod == 0b01)
+        if (mod == 0b01) {
             // 8-bit displacement follows
+            clocks += 4;
             disp = queue[2];
-        else if (mod == 0b10)
+        } else if (mod == 0b10) {
             // 16-bit displacement follows
+            clocks += 4;
             disp = queue[3] << 8 | queue[2];
+        }
 
         int ea = 0;
         switch (rm) {
         case 0b000: // EA = (BX) + (SI) + DISP
+            clocks += 7;
             ea = bh << 8 | bl + si + disp;
             break;
         case 0b001: // EA = (BX) + (DI) + DISP
+            clocks += 8;
             ea = bh << 8 | bl + di + disp;
             break;
         case 0b010: // EA = (BP) + (SI) + DISP
+            clocks += 8;
             ea = bp + si + disp;
             break;
         case 0b011: // EA = (BP) + (DI) + DISP
+            clocks += 7;
             ea = bp + di + disp;
             break;
         case 0b100: // EA = (SI) + DISP
+            clocks += 5;
             ea = si + disp;
             break;
         case 0b101: // EA = (DI) + DISP
+            clocks += 5;
             ea = di + disp;
             break;
         case 0b110:
             if (mod == 0b00) {
                 // Direct address
+                clocks += 6;
                 ea = queue[3] << 8 | queue[2];
-            } else
+            } else {
                 // EA = (BP) + DISP
+                clocks += 5;
                 ea = bp + disp;
+            }
             break;
         case 0b111: // EA = (BX) + DISP
+            clocks += 5;
             ea = bh << 8 | bl + disp;
             break;
         }
@@ -939,8 +974,11 @@ public class Intel8086 {
      */
     private int getMem(final int w) {
         final int addr = getAddr(cs, ip);
+        int val = memory[addr];
+        if (w == W)
+            val |= memory[addr + 1] << 8;
         ip += 1 + w;
-        return getMem(w, addr);
+        return val;
     }
 
     /**
@@ -954,8 +992,11 @@ public class Intel8086 {
      */
     private int getMem(final int w, final int addr) {
         int val = memory[addr];
-        if (w == W)
+        if (w == W) {
+            if ((addr & 0b1) == 0b1)
+                clocks += 4;
             val |= memory[addr + 1] << 8;
+        }
         return val;
     }
 
@@ -1041,7 +1082,7 @@ public class Intel8086 {
             return getReg(w, rm);
         else
             // Memory mode
-            return getMem(w, getEA(mod, rm));
+            return getMem(w, ea > 0 ? ea : getEA(mod, rm));
     }
 
     /**
@@ -1085,22 +1126,6 @@ public class Intel8086 {
         setFlags(w, res);
 
         return res;
-    }
-
-    /**
-     * Calls an interrupt given its type.
-     *
-     * @param type
-     *            the interrupt-type
-     */
-    private void intcall(final int type) {
-        push(flags);
-        setFlag(IF, false);
-        setFlag(TF, false);
-        push(cs);
-        push(ip);
-        ip = getMem(0b1, type * 4);
-        cs = getMem(0b1, type * 4 + 2);
     }
 
     /**
@@ -1164,7 +1189,7 @@ public class Intel8086 {
             return ppi.portIn(w, port);
         // Intel 8259
         if (port == 0x20 || port == 0x21)
-            return pic.portIn(w,  port);
+            return pic.portIn(w, port);
         return 0;
     }
 
@@ -1216,15 +1241,14 @@ public class Intel8086 {
         es = 0x0000;
         for (int i = 0; i < 6; i++)
             queue[i] = 0;
+        clocks = 0;
     }
 
     /**
      * Execute all instructions.
      */
     public void run() {
-        pit.launch();
         while (tick());
-        pit.interrupt();
     }
 
     /**
@@ -1291,8 +1315,11 @@ public class Intel8086 {
      */
     private void setMem(final int w, final int addr, final int val) {
         memory[addr] = val & 0xff;
-        if (w == W)
+        if (w == W) {
+            if ((addr & 0b1) == 0b1)
+                clocks += 4;
             memory[addr + 1] = val >>> 8 & 0xff;
+        }
     }
 
     /**
@@ -1398,7 +1425,7 @@ public class Intel8086 {
             setReg(w, rm, val);
         else
             // Memory mode
-            setMem(w, getEA(mod, rm), val);
+            setMem(w, ea > 0 ? ea : getEA(mod, rm), val);
     }
 
     /**
@@ -1457,28 +1484,46 @@ public class Intel8086 {
      * @return true if instructions remain, false otherwise
      */
     private boolean tick() {
+        // Single-step mode.
+        if (getFlag(TF)) {
+            callInt(1);
+            clocks += 50;
+        }
+
+        // External maskable interrupts.
+        if (getFlag(IF) && pic.hasInt()) {
+            callInt(pic.nextInt());
+            clocks += 61;
+        }
+
         int rep = 0;
         prefixes: while (true) {
             // Segment prefix check.
             switch (getMem(B)) {
             case 0x26: // ES: (segment override prefix)
                 os = es;
+                clocks += 2;
                 break;
             case 0x2e: // CS: (segment override prefix)
                 os = cs;
+                clocks += 2;
                 break;
             case 0x36: // SS: (segment override prefix)
                 os = ss;
+                clocks += 2;
                 break;
             case 0x3e: // DS: (segment override prefix)
                 os = ds;
+                clocks += 2;
                 break;
             // Repeat prefix check.
             case 0xf2: // REPNE/REPNZ
                 rep = 2;
+                clocks += 9;
                 break;
             case 0xf3: // REP/REPE/REPZ
                 rep = 1;
+                clocks += 9;
                 break;
             default:
                 os = ds;
@@ -1498,8 +1543,28 @@ public class Intel8086 {
         ++ip; // Increment IP.
 
         // Only repeat string instructions.
-        if (rep > 0 && (op < 0xa4 || op > 0xaf || op > 0xa7 && op < 0xaa))
+        switch (op) {
+        case 0xa4: // MOVS
+        case 0xa5:
+        case 0xaa: // STOS
+        case 0xab:
+            if (rep == 0)
+                ++clocks;
+            break;
+        case 0xa6: // CMPS
+        case 0xa7:
+        case 0xae: // SCAS
+        case 0xaf:
+            break;
+        case 0xac: // LODS
+        case 0xad:
+            if (rep == 0)
+                --clocks;
+            break;
+        default:
             rep = 0;
+            break;
+        }
 
         do {
             // Repeat prefix present.
@@ -1514,7 +1579,14 @@ public class Intel8086 {
                 setReg(W, CX, cx - 1);
             }
 
-            int dst, src, res = 0;
+            // Tick the Programmable Interval Timer.
+            while (clocks > 3) {
+                clocks -= 4;
+                pit.tick();
+            }
+
+            ea = -1; // Reset stored EA.
+            int dst, src, res;
             switch (op) {
             /*
              * Data Transfer Instructions
@@ -1543,9 +1615,11 @@ public class Intel8086 {
                 if (d == 0b0) {
                     src = getReg(w, reg);
                     setRM(w, mod, rm, src);
+                    clocks += mod == 0b11 ? 2 : 9;
                 } else {
                     src = getRM(w, mod, rm);
                     setReg(w, reg, src);
+                    clocks += mod == 0b11 ? 2 : 8;
                 }
                 break;
 
@@ -1558,6 +1632,7 @@ public class Intel8086 {
                     src = getMem(w);
                     setRM(w, mod, rm, src);
                 }
+                clocks += mod == 0b11 ? 4 : 10;
                 break;
 
             // Immediate to Register
@@ -1581,6 +1656,7 @@ public class Intel8086 {
                 reg = op       & 0b111;
                 src = getMem(w);
                 setReg(w, reg, src);
+                clocks += 4;
                 break;
 
             // Memory to/from Accumulator
@@ -1596,6 +1672,7 @@ public class Intel8086 {
                     src = getReg(w, AX);
                     setMem(w, getAddr(os, dst), src);
                 }
+                clocks += 10;
                 break;
 
             // Register/Memory to/from Segment Register
@@ -1605,9 +1682,11 @@ public class Intel8086 {
                 if (d == 0b0) {
                     src = getSegReg(reg);
                     setRM(W, mod, rm, src);
+                    clocks += mod == 0b11 ? 2 : 9;
                 } else {
                     src = getRM(W, mod, rm);
                     setSegReg(reg, src);
+                    clocks += mod == 0b11 ? 2 : 8;
                 }
                 break;
 
@@ -1616,7 +1695,7 @@ public class Intel8086 {
              *
              * PUSH decrements SP (the stack pointer) by two and then transfers
              * a word from the source operand to the top of the stack now
-             * pointer by SP. PUSH often is used to place parameters on the
+             * pointed by SP. PUSH often is used to place parameters on the
              * stack before calling a procedure; more generally, it is the basic
              * means of storing temporary data on the stack.
              */
@@ -1632,6 +1711,7 @@ public class Intel8086 {
                 reg = op & 0b111;
                 src = getReg(W, reg);
                 push(src);
+                clocks += 11;
                 break;
 
             // Segment Register
@@ -1642,6 +1722,7 @@ public class Intel8086 {
                 reg = op >>> 3 & 0b111;
                 src = getSegReg(reg);
                 push(src);
+                clocks += 10;
                 break;
 
             /*
@@ -1664,6 +1745,7 @@ public class Intel8086 {
                 reg = op & 0b111;
                 src = pop();
                 setReg(W, reg, src);
+                clocks += 8;
                 break;
 
             // Segment Register
@@ -1674,6 +1756,7 @@ public class Intel8086 {
                 reg = op >>> 3 & 0b111;
                 src = pop();
                 setSegReg(reg, src);
+                clocks += 8;
                 break;
 
             /*
@@ -1692,6 +1775,7 @@ public class Intel8086 {
                 src = getRM(w, mod, rm);
                 setReg(w, reg, src);
                 setRM(w, mod, rm, dst);
+                clocks += mod == 0b11 ? 3 : 17;
                 break;
 
             // Register with Accumulator
@@ -1707,6 +1791,7 @@ public class Intel8086 {
                 src = getReg(W, reg);
                 setReg(W, AX, src);
                 setReg(W, reg, dst);
+                clocks += 3;
                 break;
 
             /*
@@ -1726,6 +1811,7 @@ public class Intel8086 {
              */
             case 0xd7: // XLAT SOURCE-TABLE
                 al = getMem(B, getAddr(os, getReg(W, BX) + al));
+                clocks += 11;
                 break;
 
             /*
@@ -1743,12 +1829,18 @@ public class Intel8086 {
             case 0xe5: // IN AX,IMMED8
                 src = getMem(B);
                 setReg(w, AX, portIn(w, src));
+                clocks += 10;
+                if (w == W && (src & 0b1) == 0b1)
+                    clocks += 4;
                 break;
             // Fixed Port
             case 0xec: // IN AL,DX
             case 0xed: // IN AX,DX
                 src = getReg(W, DX);
                 setReg(w, AX, portIn(w, src));
+                clocks += 8;
+                if (w == W && (src & 0b1) == 0b1)
+                    clocks += 4;
                 break;
 
             /*
@@ -1766,12 +1858,18 @@ public class Intel8086 {
             case 0xe7: // OUT AX,IMMED8
                 src = getMem(B);
                 portOut(w, src, getReg(w, AX));
+                clocks += 10;
+                if (w == W && (src & 0b1) == 0b1)
+                    clocks += 4;
                 break;
             // Fixed Port
             case 0xee: // OUT AL,DX
             case 0xef: // OUT AX,DX
                 src = getReg(W, DX);
                 portOut(w, src, getReg(w, AX));
+                clocks += 8;
+                if (w == W && (src & 0b1) == 0b1)
+                    clocks += 4;
                 break;
 
             /*
@@ -1797,6 +1895,7 @@ public class Intel8086 {
                 decode();
                 src = getEA(mod, rm) - (os << 4);
                 setReg(w, reg, src);
+                clocks += 2;
                 break;
 
             /*
@@ -1813,11 +1912,12 @@ public class Intel8086 {
              * assume that the source string is located in the current data
              * segment and that SI contains the offset of the string).
              */
-            case 0xc5: // LDS REG16,MEM16
+            case 0xc5: // LDS REG16,MEM32
                 decode();
                 src = getEA(mod, rm);
                 setReg(w, reg, getMem(W, src));
                 ds = getMem(W, src + 2);
+                clocks += 16;
                 break;
 
             /*
@@ -1834,11 +1934,12 @@ public class Intel8086 {
              * string must be located in the extra segment, and DI must contain
              * the offset of the string).
              */
-            case 0xc4: // LES REG16,MEM16
+            case 0xc4: // LES REG16,MEM32
                 decode();
                 src = getEA(mod, rm);
                 setReg(w, reg, getMem(W, src));
                 es = getMem(W, src + 2);
+                clocks += 16;
                 break;
 
             /*
@@ -1855,6 +1956,7 @@ public class Intel8086 {
              */
             case 0x9f: // LAHF
                 ah = flags & 0xff;
+                clocks += 4;
                 break;
 
             /*
@@ -1868,6 +1970,7 @@ public class Intel8086 {
              */
             case 0x9e: // SAHF
                 flags = flags & 0xff00 | ah;
+                clocks += 4;
                 break;
 
             /*
@@ -1879,6 +1982,7 @@ public class Intel8086 {
              */
             case 0x9c: // PUSHF
                 push(flags);
+                clocks += 10;
                 break;
 
             /*
@@ -1896,6 +2000,7 @@ public class Intel8086 {
              */
             case 0x9d: // POPF
                 flags = pop();
+                clocks += 8;
                 break;
 
             /*
@@ -2004,10 +2109,13 @@ public class Intel8086 {
                     src = getRM(w, mod, rm);
                 }
                 res = add(w, dst, src);
-                if (d == 0b0)
+                if (d == 0b0) {
                     setRM(w, mod, rm, res);
-                else
+                    clocks += mod == 0b11 ? 3 : 16;
+                } else {
                     setReg(w, reg, res);
+                    clocks += mod == 0b11 ? 3 : 9;
+                }
                 break;
 
             // Immediate to Accumulator
@@ -2017,6 +2125,7 @@ public class Intel8086 {
                 src = getMem(w);
                 res = add(w, dst, src);
                 setReg(w, AX, res);
+                clocks += 4;
                 break;
 
             /*
@@ -2043,10 +2152,13 @@ public class Intel8086 {
                     src = getRM(w, mod, rm);
                 }
                 res = adc(w, dst, src);
-                if (d == 0b0)
+                if (d == 0b0) {
                     setRM(w, mod, rm, res);
-                else
+                    clocks += mod == 0b11 ? 3 : 16;
+                } else {
                     setReg(w, reg, res);
+                    clocks += mod == 0b11 ? 3 : 9;
+                }
                 break;
 
             // Immediate to Accumulator
@@ -2056,6 +2168,7 @@ public class Intel8086 {
                 src = getMem(w);
                 res = adc(w, dst, src);
                 setReg(w, AX, res);
+                clocks += 4;
                 break;
 
             /*
@@ -2078,6 +2191,7 @@ public class Intel8086 {
                 src = getReg(W, reg);
                 res = inc(W, src);
                 setReg(W, reg, res);
+                clocks += 2;
                 break;
 
             /*
@@ -2099,6 +2213,7 @@ public class Intel8086 {
                     setFlag(AF, false);
                 }
                 al &= 0xf;
+                clocks += 4;
                 break;
 
             /*
@@ -2128,6 +2243,7 @@ public class Intel8086 {
                 } else
                     setFlag(CF, false);
                 setFlags(B, al);
+                clocks += 4;
                 break;
             }
 
@@ -2156,10 +2272,13 @@ public class Intel8086 {
                     src = getRM(w, mod, rm);
                 }
                 res = sub(w, dst, src);
-                if (d == 0b0)
+                if (d == 0b0) {
                     setRM(w, mod, rm, res);
-                else
+                    clocks += mod == 0b11 ? 3 : 16;
+                } else {
                     setReg(w, reg, res);
+                    clocks += mod == 0b11 ? 3 : 9;
+                }
                 break;
 
             // Immediate from Accumulator
@@ -2169,6 +2288,7 @@ public class Intel8086 {
                 src = getMem(w);
                 res = sub(w, dst, src);
                 setReg(w, AX, res);
+                clocks += 4;
                 break;
 
             /*
@@ -2196,10 +2316,13 @@ public class Intel8086 {
                     src = getRM(w, mod, rm);
                 }
                 res = sbb(w, dst, src);
-                if (d == 0b0)
+                if (d == 0b0) {
                     setRM(w, mod, rm, res);
-                else
+                    clocks += mod == 0b11 ? 3 : 16;
+                } else {
                     setReg(w, reg, res);
+                    clocks += mod == 0b11 ? 3 : 9;
+                }
                 break;
 
             // Immediate to Accumulator
@@ -2209,6 +2332,7 @@ public class Intel8086 {
                 src = getMem(w);
                 res = sbb(w, dst, src);
                 setReg(w, AX, res);
+                clocks += 4;
                 break;
 
             /*
@@ -2231,6 +2355,7 @@ public class Intel8086 {
                 dst = getReg(W, reg);
                 res = dec(W, dst);
                 setReg(W, reg, res);
+                clocks += 2;
                 break;
 
             /*
@@ -2273,6 +2398,7 @@ public class Intel8086 {
                     src = getRM(w, mod, rm);
                 }
                 sub(w, dst, src);
+                clocks += mod == 0b11 ? 3 : 9;
                 break;
 
             // Immediate with Accumulator
@@ -2281,6 +2407,7 @@ public class Intel8086 {
                 dst = getReg(w, AX);
                 src = getMem(w);
                 sub(w, dst, src);
+                clocks += 4;
                 break;
 
             /*
@@ -2305,6 +2432,7 @@ public class Intel8086 {
                     setFlag(AF, false);
                 }
                 al &= 0xf;
+                clocks += 4;
                 break;
 
             /*
@@ -2335,6 +2463,7 @@ public class Intel8086 {
                 } else
                     setFlag(CF, false);
                 setFlags(B, al);
+                clocks += 4;
                 break;
             }
 
@@ -2388,11 +2517,12 @@ public class Intel8086 {
             case 0xd4: // AAM
                 src = getMem(B);
                 if (src == 0)
-                    intcall(0);
+                    callInt(0);
                 else {
                     ah = al / src & 0xff;
                     al = al % src & 0xff;
                     setFlags(W, getReg(W, AX));
+                    clocks += 83;
                 }
                 break;
 
@@ -2461,6 +2591,7 @@ public class Intel8086 {
                 al = ah * src + al & 0xff;
                 ah = 0;
                 setFlags(B, al);
+                clocks += 60;
                 break;
 
             /*
@@ -2476,6 +2607,7 @@ public class Intel8086 {
                     ah = 0xff;
                 else
                     ah = 0x00;
+                clocks += 2;
                 break;
 
             /*
@@ -2491,6 +2623,7 @@ public class Intel8086 {
                     setReg(W, DX, 0xffff);
                 else
                     setReg(W, DX, 0x0000);
+                clocks += 5;
                 break;
 
             /*
@@ -2552,10 +2685,13 @@ public class Intel8086 {
                 }
                 res = dst & src;
                 logic(w, res);
-                if (d == 0b0)
+                if (d == 0b0) {
                     setRM(w, mod, rm, res);
-                else
+                    clocks += mod == 0b11 ? 3 : 16;
+                } else {
                     setReg(w, reg, res);
+                    clocks += mod == 0b11 ? 3 : 9;
+                }
                 break;
 
             // Immediate to Accumulator
@@ -2566,6 +2702,7 @@ public class Intel8086 {
                 res = dst & src;
                 logic(w, res);
                 setReg(w, AX, res);
+                clocks += 4;
                 break;
 
             /*
@@ -2591,10 +2728,13 @@ public class Intel8086 {
                 }
                 res = dst | src;
                 logic(w, res);
-                if (d == 0b0)
+                if (d == 0b0) {
                     setRM(w, mod, rm, res);
-                else
+                    clocks += mod == 0b11 ? 3 : 16;
+                } else {
                     setReg(w, reg, res);
+                    clocks += mod == 0b11 ? 3 : 9;
+                }
                 break;
 
             // Immediate to Accumulator
@@ -2605,6 +2745,7 @@ public class Intel8086 {
                 res = dst | src;
                 logic(w, res);
                 setReg(w, AX, res);
+                clocks += 4;
                 break;
 
             /*
@@ -2631,10 +2772,13 @@ public class Intel8086 {
                 }
                 res = dst ^ src;
                 logic(w, res);
-                if (d == 0b0)
+                if (d == 0b0) {
                     setRM(w, mod, rm, res);
-                else
+                    clocks += mod == 0b11 ? 3 : 16;
+                } else {
                     setReg(w, reg, res);
+                    clocks += mod == 0b11 ? 3 : 9;
+                }
                 break;
 
             // Immediate to Accumulator
@@ -2645,6 +2789,7 @@ public class Intel8086 {
                 res = dst ^ src;
                 logic(w, res);
                 setReg(w, AX, res);
+                clocks += 4;
                 break;
 
             /*
@@ -2663,6 +2808,7 @@ public class Intel8086 {
                 dst = getRM(w, mod, rm);
                 src = getReg(w, reg);
                 logic(w, dst & src);
+                clocks += mod == 0b11 ? 3 : 9;
                 break;
 
             // Immediate and Accumulator
@@ -2671,6 +2817,7 @@ public class Intel8086 {
                 dst = getReg(w, AX);
                 src = getMem(w);
                 logic(w, dst & src);
+                clocks += 4;
                 break;
 
             /*
@@ -2901,6 +3048,7 @@ public class Intel8086 {
                 setMem(w, getAddr(es, di), src);
                 si = si + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
                 di = di + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
+                clocks += 17;
                 break;
 
             /*
@@ -2930,6 +3078,7 @@ public class Intel8086 {
                 di = di + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
                 if (rep == 1 && !getFlag(ZF) || rep == 2 && getFlag(ZF))
                     rep = 0;
+                clocks += 22;
                 break;
 
             /*
@@ -2958,6 +3107,7 @@ public class Intel8086 {
                 di = di + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
                 if (rep == 1 && !getFlag(ZF) || rep == 2 && getFlag(ZF))
                     rep = 0;
+                clocks += 15;
                 break;
 
             /*
@@ -2977,6 +3127,7 @@ public class Intel8086 {
                 src = getMem(w, getAddr(os, si));
                 setReg(w, AX, src);
                 si = si + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
+                clocks += 13;
                 break;
 
             /*
@@ -2993,6 +3144,7 @@ public class Intel8086 {
                 src = getReg(w, AX);
                 setMem(w, getAddr(es, di), src);
                 di = di + (getFlag(DF) ? -1 : 1) * (1 + w) & 0xffff;
+                clocks += 10;
                 break;
 
             /*
@@ -3090,6 +3242,7 @@ public class Intel8086 {
                 dst = signconv(W, dst);
                 push(ip);
                 ip += dst;
+                clocks += 19;
                 break;
 
             // Direct Intersegment
@@ -3100,6 +3253,7 @@ public class Intel8086 {
                 push(ip);
                 ip = dst;
                 cs = src;
+                clocks += 28;
                 break;
 
             /*
@@ -3121,6 +3275,7 @@ public class Intel8086 {
             // Within Segment
             case 0xc3: // RET (intrasegment)
                 ip = pop();
+                clocks += 8;
                 break;
 
             // Within Seg Adding Immed to SP
@@ -3128,12 +3283,14 @@ public class Intel8086 {
                 src = getMem(W);
                 ip = pop();
                 sp += src;
+                clocks += 12;
                 break;
 
             // Intersegment
             case 0xcb: // RET (intersegment)
                 ip = pop();
                 cs = pop();
+                clocks += 18;
                 break;
 
             // Intersegment Adding Immediate to SP
@@ -3142,6 +3299,7 @@ public class Intel8086 {
                 ip = pop();
                 cs = pop();
                 sp += src;
+                clocks += 17;
                 break;
 
             /*
@@ -3183,6 +3341,7 @@ public class Intel8086 {
                 dst = getMem(W);
                 dst = signconv(W, dst);
                 ip += dst;
+                clocks += 15;
                 break;
 
             // Direct within Segment-Short
@@ -3190,6 +3349,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 ip += dst;
+                clocks += 15;
                 break;
 
             // Direct Intersegment
@@ -3198,6 +3358,7 @@ public class Intel8086 {
                 src = getMem(W);
                 ip = dst;
                 cs = src;
+                clocks += 15;
                 break;
 
             /*
@@ -3226,8 +3387,11 @@ public class Intel8086 {
             case 0x70: // JO SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (getFlag(OF))
+                if (getFlag(OF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3238,8 +3402,11 @@ public class Intel8086 {
             case 0x71: // JNO SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (!getFlag(OF))
+                if (!getFlag(OF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3250,8 +3417,11 @@ public class Intel8086 {
             case 0x72: // JB/JNAE/JC SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (getFlag(CF))
+                if (getFlag(CF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3262,8 +3432,11 @@ public class Intel8086 {
             case 0x73: // JNB/JAE/JNC SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (!getFlag(CF))
+                if (!getFlag(CF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3274,8 +3447,11 @@ public class Intel8086 {
             case 0x74: // JE/JZ SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (getFlag(ZF))
+                if (getFlag(ZF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3286,8 +3462,11 @@ public class Intel8086 {
             case 0x75: // JNE/JNZ SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (!getFlag(ZF))
+                if (!getFlag(ZF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3298,8 +3477,11 @@ public class Intel8086 {
             case 0x76: // JBE/JNA SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (getFlag(CF) | getFlag(ZF))
+                if (getFlag(CF) | getFlag(ZF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3310,8 +3492,11 @@ public class Intel8086 {
             case 0x77: // JNBE/JA SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (!(getFlag(CF) | getFlag(ZF)))
+                if (!(getFlag(CF) | getFlag(ZF))) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3322,8 +3507,11 @@ public class Intel8086 {
             case 0x78: // JS SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (getFlag(SF))
+                if (getFlag(SF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3334,8 +3522,11 @@ public class Intel8086 {
             case 0x79: // JNS SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (!getFlag(SF))
+                if (!getFlag(SF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3346,8 +3537,11 @@ public class Intel8086 {
             case 0x7a: // JP/JPE SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (getFlag(PF))
+                if (getFlag(PF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3358,8 +3552,11 @@ public class Intel8086 {
             case 0x7b: // JNP/JPO SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (!getFlag(PF))
+                if (!getFlag(PF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3370,8 +3567,11 @@ public class Intel8086 {
             case 0x7c: // JL/JNGE SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (getFlag(SF) ^ getFlag(OF))
+                if (getFlag(SF) ^ getFlag(OF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3382,8 +3582,11 @@ public class Intel8086 {
             case 0x7d: // JNL/JGE SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (!(getFlag(SF) ^ getFlag(OF)))
+                if (!(getFlag(SF) ^ getFlag(OF))) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3394,8 +3597,11 @@ public class Intel8086 {
             case 0x7e: // JLE/JNG SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (getFlag(SF) ^ getFlag(OF) | getFlag(ZF))
+                if (getFlag(SF) ^ getFlag(OF) | getFlag(ZF)) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3406,8 +3612,11 @@ public class Intel8086 {
             case 0x7f: // JNLE/JG SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (!(getFlag(SF) ^ getFlag(OF) | getFlag(ZF)))
+                if (!(getFlag(SF) ^ getFlag(OF) | getFlag(ZF))) {
                     ip += dst;
+                    clocks += 16;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3432,8 +3641,11 @@ public class Intel8086 {
                 dst = signconv(B, dst);
                 src = getReg(W, CX) - 1 & 0xffff;
                 setReg(W, CX, src);
-                if (src != 0)
+                if (src != 0) {
                     ip += dst;
+                    clocks += 17;
+                } else
+                    clocks += 5;
                 break;
 
             /*
@@ -3450,8 +3662,11 @@ public class Intel8086 {
                 dst = signconv(B, dst);
                 src = getReg(W, CX) - 1 & 0xffff;
                 setReg(W, CX, src);
-                if (src != 0 && getFlag(ZF))
+                if (src != 0 && getFlag(ZF)) {
                     ip += dst;
+                    clocks += 18;
+                } else
+                    clocks += 6;
                 break;
 
             /*
@@ -3468,8 +3683,11 @@ public class Intel8086 {
                 dst = signconv(B, dst);
                 src = getReg(W, CX) - 1 & 0xffff;
                 setReg(W, CX, src);
-                if (src != 0 && !getFlag(ZF))
+                if (src != 0 && !getFlag(ZF)) {
                     ip += dst;
+                    clocks += 19;
+                } else
+                    clocks += 5;
                 break;
 
             /*
@@ -3483,8 +3701,11 @@ public class Intel8086 {
             case 0xe3: // JCXZ SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                if (getReg(W, CX) == 0)
+                if (getReg(W, CX) == 0) {
                     ip += dst;
+                    clocks += 18;
+                } else
+                    clocks += 6;
                 break;
 
             /*
@@ -3526,7 +3747,8 @@ public class Intel8086 {
             case 0xcc: // INT 3
             // Type Specified
             case 0xcd: // INT IMMED8
-                intcall(op == 0xcc ? 3 : getMem(B));
+                callInt(op == 0xcc ? 3 : getMem(B));
+                clocks += op == 0xcc ? 52 : 51;
                 break;
 
             /*
@@ -3542,8 +3764,11 @@ public class Intel8086 {
              * interrupt procedure if overflow occurs.
              */
             case 0xce: // INTO
-                if (getFlag(OF))
-                    intcall(4);
+                if (getFlag(OF)) {
+                    callInt(4);
+                    clocks += 53;
+                } else
+                    clocks += 4;
                 break;
 
             /*
@@ -3559,6 +3784,7 @@ public class Intel8086 {
                 ip = pop();
                 cs = pop();
                 flags = pop();
+                clocks += 24;
                 break;
 
             /*
@@ -3583,6 +3809,7 @@ public class Intel8086 {
              */
             case 0xf8: // CLC
                 setFlag(CF, false);
+                clocks += 2;
                 break;
 
             /*
@@ -3593,6 +3820,7 @@ public class Intel8086 {
              */
             case 0xf5: // CMC
                 setFlag(CF, !getFlag(CF));
+                clocks += 2;
                 break;
 
             /*
@@ -3602,6 +3830,7 @@ public class Intel8086 {
              */
             case 0xf9: // STC
                 setFlag(CF, true);
+                clocks += 2;
                 break;
 
             /*
@@ -3613,6 +3842,7 @@ public class Intel8086 {
              */
             case 0xfc: // CLD
                 setFlag(DF, false);
+                clocks += 2;
                 break;
 
             /*
@@ -3624,6 +3854,7 @@ public class Intel8086 {
              */
             case 0xfd: // STD
                 setFlag(DF, true);
+                clocks += 2;
                 break;
 
             /*
@@ -3638,6 +3869,7 @@ public class Intel8086 {
              */
             case 0xfa: // CLI
                 setFlag(IF, false);
+                clocks += 2;
                 break;
 
             /*
@@ -3651,6 +3883,7 @@ public class Intel8086 {
              */
             case 0xfb: // STI
                 setFlag(IF, true);
+                clocks += 2;
                 break;
 
             /*
@@ -3668,6 +3901,7 @@ public class Intel8086 {
              * program must wait for an interrupt.
              */
             case 0xf4: // HLT
+                clocks += 2;
                 return false;
 
             /*
@@ -3677,10 +3911,11 @@ public class Intel8086 {
              * is not active. WAIT does not affect any flags.
              */
             case 0x9b: // WAIT
+                clocks += 3;
                 break;
 
             /*
-             * ESC external-opcode, source
+             * ESC external-opcode,source
              *
              * ESC (Escape) provides a means for an external processor to obtain
              * an opcode and possibly a memory operand from the 8086. The
@@ -3693,15 +3928,16 @@ public class Intel8086 {
              * discards it. An external processor may capture the memory operand
              * when the processor reads it from memory.
              */
-            case 0xd8: // ESC OPCODE,SOURCE
-            case 0xd9: // ESC OPCODE,SOURCE
-            case 0xda: // ESC OPCODE,SOURCE
-            case 0xdb: // ESC OPCODE,SOURCE
-            case 0xdc: // ESC OPCODE,SOURCE
-            case 0xdd: // ESC OPCODE,SOURCE
-            case 0xde: // ESC OPCODE,SOURCE
-            case 0xdf: // ESC OPCODE,SOURCE
+            case 0xd8: // ESC 0,SOURCE
+            case 0xd9: // ESC 1,SOURCE
+            case 0xda: // ESC 2,SOURCE
+            case 0xdb: // ESC 3,SOURCE
+            case 0xdc: // ESC 4,SOURCE
+            case 0xdd: // ESC 5,SOURCE
+            case 0xde: // ESC 6,SOURCE
+            case 0xdf: // ESC 7,SOURCE
                 decode();
+                clocks += mod == 0b11 ? 2 : 8;
                 break;
 
             /*
@@ -3712,6 +3948,7 @@ public class Intel8086 {
              * instruction executes. LOCK does not affect any flags.
              */
             case 0xf0: // LOCK
+                clocks += 2;
                 break;
 
             /*
@@ -3724,6 +3961,7 @@ public class Intel8086 {
              * affect any flags.
              */
             case 0x90: // NOP
+                clocks += 3;
                 break;
 
             /*
@@ -3811,8 +4049,11 @@ public class Intel8086 {
                     break;
                 case 0b111: // CMP
                     sub(w, dst, src);
+                    if (mod == 0b11)
+                        clocks -= 7;
                     break;
                 }
+                clocks += mod == 0b11 ? 4 : 17;
                 break;
 
             /*
@@ -3827,6 +4068,7 @@ public class Intel8086 {
                     setRM(w, mod, rm, src);
                     break;
                 }
+                clocks += mod == 0b11 ? 8 : 17;
                 break;
 
             /*
@@ -3953,6 +4195,10 @@ public class Intel8086 {
                     break;
                 }
                 setRM(w, mod, rm, dst);
+                if (op == 0xd0 || op == 0xd1)
+                    clocks += mod == 0b11 ? 2 : 15;
+                else
+                    clocks += mod == 0b11 ? 8 + 4 * src : 20 + 4 * src;
                 break;
             }
 
@@ -3960,7 +4206,7 @@ public class Intel8086 {
              * GROUP 3
              */
             case 0xf6:
-                // TEST REG8/MEM8
+                // TEST REG8/MEM8,IMMED8
                 // NOT REG8/MEM8
                 // NEG REG8/MEM8
                 // MUL REG8/MEM8
@@ -3968,7 +4214,7 @@ public class Intel8086 {
                 // DIV REG8/MEM8
                 // IDIV REG8/MEM8
             case 0xf7:
-                // TEST REG16/MEM16
+                // TEST REG16/MEM16,IMMED16
                 // NOT REG16/MEM16
                 // NEG REG16/MEM16
                 // MUL REG16/MEM16
@@ -3981,14 +4227,17 @@ public class Intel8086 {
                 case 0b000: // TEST
                     dst = getMem(w);
                     logic(w, dst & src);
+                    clocks += mod == 0b11 ? 5 : 11;
                     break;
                 case 0b010: // NOT
                     setRM(w, mod, rm, ~src);
+                    clocks += mod == 0b11 ? 3 : 16;
                     break;
                 case 0b011: // NEG
                     dst = sub(w, 0, src);
                     setFlag(CF, dst > 0);
                     setRM(w, mod, rm, dst);
+                    clocks += mod == 0b11 ? 3 : 16;
                     break;
                 case 0b100: // MUL
                     if (w == B) {
@@ -4002,6 +4251,7 @@ public class Intel8086 {
                             setFlag(CF, false);
                             setFlag(OF, false);
                         }
+                        clocks += mod == 0b11 ? (77 - 70) / 2 : (83 - 76) / 2;
                     } else {
                         dst = getReg(W, AX);
                         final long lres = (long) dst * (long) src & 0xffffffff;
@@ -4014,6 +4264,7 @@ public class Intel8086 {
                             setFlag(CF, false);
                             setFlag(OF, false);
                         }
+                        clocks += mod == 0b11 ? (133 - 118) / 2 : (139 - 124) / 2;
                     }
                     break;
                 case 0b101: // IMUL
@@ -4030,6 +4281,7 @@ public class Intel8086 {
                             setFlag(CF, false);
                             setFlag(OF, false);
                         }
+                        clocks += mod == 0b11 ? (98 - 80) / 2 : (154 - 128) / 2;
                     } else {
                         src = signconv(W, src);
                         dst = ah << 8 | al;
@@ -4045,46 +4297,50 @@ public class Intel8086 {
                             setFlag(CF, false);
                             setFlag(OF, false);
                         }
+                        clocks += mod == 0b11 ? (104 - 86) / 2 : (160 - 134) / 2;
                     }
                     break;
                 case 0b110: // DIV
                     if (src == 0)
-                        intcall(0);
+                        callInt(0);
                     else if (w == B) {
                         dst = ah << 8 | al;
                         res = dst / src & 0xffff;
                         if (res > 0xff)
-                            intcall(0);
+                            callInt(0);
                         else {
                             al = res & 0xff;
                             ah = dst % src & 0xff;
                         }
+                        clocks += mod == 0b11 ? (90 - 80) / 2 : (96 - 86) / 2;
                     } else {
                         final long ldst = (long) getReg(W, DX) << 16 | getReg(W, AX);
                         long lres = ldst / src & 0xffffffff;
                         if (lres > 0xffff)
-                            intcall(0);
+                            callInt(0);
                         else {
                             setReg(W, AX, (int) lres);
                             lres = ldst % src & 0xffff;
                             setReg(W, DX, (int) lres);
                         }
+                        clocks += mod == 0b11 ? (162 - 144) / 2 : (168 - 150) / 2;
                     }
                     break;
                 case 0b111: // IDIV
                     if (src == 0)
-                        intcall(0);
+                        callInt(0);
                     else if (w == B) {
                         src = signconv(B, src);
                         dst = getReg(W, AX);
                         dst = signconv(W, dst);
                         res = dst / src & 0xffff;
                         if (res > 0x007f && res < 0xff81)
-                            intcall(0);
+                            callInt(0);
                         else {
                             al = res & 0xff;
                             ah = dst % src & 0xff;
                         }
+                        clocks += mod == 0b11 ? (112 - 101) / 2 : (118 - 107) / 2;
                     } else {
                         src = signconv(W, src);
                         long ldst = (long) getReg(W, DX) << 16 | getReg(W, AX);
@@ -4092,12 +4348,13 @@ public class Intel8086 {
                         ldst = ldst << 32 >> 32;
                         long lres = ldst / src & 0xffffffff;
                         if (lres > 0x00007fff | lres < 0xffff8000)
-                            intcall(0);
+                            callInt(0);
                         else {
                             setReg(W, AX, (int) lres);
                             lres = ldst % src & 0xffff;
                             setReg(W, DX, (int) lres);
                         }
+                        clocks += mod == 0b11 ? (184 - 165) / 2 : (190 - 171) / 2;
                     }
                     break;
                 }
@@ -4121,6 +4378,7 @@ public class Intel8086 {
                     setRM(w, mod, rm, res);
                     break;
                 }
+                clocks += mod == 0b11 ? 3 : 15;
                 break;
 
             /*
@@ -4140,14 +4398,17 @@ public class Intel8086 {
                 case 0b000: // INC
                     res = inc(w, src);
                     setRM(w, mod, rm, res);
+                    clocks += mod == 0b11 ? 3 : 15;
                     break;
                 case 0b001: // DEC
                     res = dec(w, src);
                     setRM(w, mod, rm, res);
+                    clocks += mod == 0b11 ? 3 : 15;
                     break;
                 case 0b010: // CALL
                     push(ip);
                     ip = src;
+                    clocks += mod == 0b11 ? 16 : 21;
                     break;
                 case 0b011: // CALL
                     push(cs);
@@ -4155,17 +4416,21 @@ public class Intel8086 {
                     dst = getEA(mod, rm);
                     ip = getMem(W, dst);
                     cs = getMem(W, dst + 2);
+                    clocks += 37;
                     break;
                 case 0b100: // JMP
                     ip = src;
+                    clocks += mod == 0b11 ? 11 : 18;
                     break;
                 case 0b101: // JMP
                     dst = getEA(mod, rm);
                     ip = getMem(W, dst);
                     cs = getMem(W, dst + 2);
+                    clocks += 24;
                     break;
                 case 0b110: // PUSH
                     push(src);
+                    clocks += mod == 0b11 ? 11 : 16;
                     break;
                 }
                 break;

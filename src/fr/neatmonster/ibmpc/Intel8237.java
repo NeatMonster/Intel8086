@@ -29,12 +29,12 @@ public class Intel8237 {
      * 8-bit bytes in the Program Condition by the microprocessor. The registers
      * cannot be read by the microprocessor.
      */
-    /**  Base Address Register */
-    private int[]     addr     = new int[4];
+    /** Base Address Register */
+    private final int[]     addr     = new int[4];
     /** Word Count Register */
-    private int[]     cnt      = new int[4];
+    private final int[]     cnt      = new int[4];
     /** The toggle for reading/writing. */
-    private boolean[] flipflop = new boolean[4];
+    private final boolean[] flipflop = new boolean[4];
 
     /**
      * Write output to the specified CPU port.

@@ -33,37 +33,31 @@ package fr.neatmonster.ibmpc;
  * - Digital One-Shot
  * - Complex Motor Controller
  */
-public class Intel8253 extends Thread {
-    /** The last time counters were updated. */
-    private long               last    = System.nanoTime();
-    /** Should the Java thread stop? */
-    private boolean            running = false;
+public class Intel8253 {
+    /**
+     * Intel 8259 - Programmable Interrupt Controller
+     *
+     * @see fr.neatmonster.ibmpc.Intel8259
+     */
+    private final Intel8259    pic;
 
     /** The actual value of each counter. */
-    private volatile int[]     count   = new int[] { -1, -1, -1 };
+    private volatile int[]     count   = new int[3];
     /** The initial value of each counter. */
-    private volatile int[]     value   = new int[] { -1, -1, -1 };
+    private volatile int[]     value   = new int[3];
     /** The latched value of each counter. */
-    private volatile int[]     latch   = new int[] { -1, -1, -1 };
+    private volatile int[]     latch   = new int[3];
     /** The control word of each counter. */
     private volatile int[]     control = new int[3];
+    /** Is each counter enabled? */
+    private volatile boolean[] enabled = new boolean[3];
+    /** Is each counter latched? */
+    private volatile boolean[] latched = new boolean[3];
     /** The toggle for lsb, then msb reading. */
     private volatile boolean[] toggle  = new boolean[3];
 
-    /**
-     * Interrupts the Java thread.
-     */
-    @Override
-    public void interrupt() {
-        running = false;
-    }
-
-    /**
-     * Launches the Java thread.
-     */
-    public void launch() {
-        running = true;
-        super.start();
+    public Intel8253(final Intel8259 pic) {
+        this.pic = pic;
     }
 
     /**
@@ -85,10 +79,10 @@ public class Intel8253 extends Thread {
             final int rl = control[sc] >>> 4 & 0b11;
             // Use latch if set.
             int val = count[sc];
-            if (latch[sc] > 0) {
+            if (latched[sc]) {
                 val = latch[sc];
                 if (rl < 0b11 || !toggle[sc])
-                    latch[sc] = -1;
+                    latched[sc] = false;
             }
             switch (rl) {
             case 0b01: // Read least significant byte only.
@@ -128,52 +122,37 @@ public class Intel8253 extends Thread {
             final int rl = control[sc] >>> 4 & 0b11;
             switch (rl) {
             case 0b01: // Load least significant byte only.
-                value[sc] = value[sc] & 0xff00 | (val > 0 ? val : 0);
+                value[sc] = value[sc] & 0xff00 | val;
                 break;
             case 0b10: // Load most significant byte only.
-                value[sc] = (val > 0 ? val : 0) << 8 | value[sc] & 0xff;
+                value[sc] = val << 8 | value[sc] & 0xff;
                 break;
             case 0b11: // Load lsb first, then msb.
                 if (!toggle[sc]) {
                     toggle[sc] = true;
-                    value[sc] = value[sc] & 0xff00 | (val > 0 ? val : 0);
+                    value[sc] = value[sc] & 0xff00 | val;
                 } else {
                     toggle[sc] = false;
-                    value[sc] = (val > 0 ? val : 0) << 8 | value[sc] & 0xff;
+                    value[sc] = val << 8 | value[sc] & 0xff;
                 }
                 break;
             }
-            if (rl < 0b11 || !toggle[sc])
+            if (rl < 0b11 || !toggle[sc]) {
                 count[sc] = value[sc];
+                enabled[sc] = true;
+            }
             break;
         }
         case 0b11:
             sc = val >>> 6 & 0b11;
-            if ((val >>> 4 & 0b11) == 0b00)
+            if ((val >>> 4 & 0b11) == 0b00) {
                 // Counter latching.
                 latch[sc] = count[sc];
-            else
+                latched[sc] = true;
+            } else
                 // Counter programming.
                 control[sc] = val & 0xffff;
             break;
-        }
-    }
-
-    /**
-     * (non-Javadoc)
-     *
-     * @see java.lang.Thread#run()
-     */
-    @Override
-    public void run() {
-        long time;
-        while (running) {
-            time = System.nanoTime();
-            // 1.193182 MHz - 838 ns
-            if (time - last >= 838) {
-                last = time;
-                tick();
-            }
         }
     }
 
@@ -182,8 +161,25 @@ public class Intel8253 extends Thread {
      */
     public void tick() {
         for (int sc = 0b00; sc < 0b11; ++sc)
-            if (count[sc] >= 0)
+            if (enabled[sc])
                 switch (control[sc] >>> 1 & 0b111) {
+                case 0b00:
+                    /*
+                     * Mode 0: Interrupt on Terminal Count
+                     *
+                     * The output will be initially low after the mode set
+                     * operation. After the count is loaded into the selected
+                     * count register, the output will remain low and the
+                     * counter will count. When terminal count is reached, the
+                     * output will go high and remain high until the selected
+                     * count register is reloaded with the mode or a new count
+                     * is loaded. The counter continues to decrement after
+                     * terminal count has been reached.
+                     */
+                    count[sc] = --count[sc] & 0xffff;
+                    if (count[sc] == 0)
+                        pic.callIRQ(0);
+                    break;
                 case 0b10:
                     /*
                      * Mode 2: Rate Generator

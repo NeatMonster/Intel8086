@@ -1,5 +1,7 @@
 package fr.neatmonster.ibmpc;
 
+import java.awt.Toolkit;
+
 /**
  * The Intel 8255 is a general purpose programmable I/O device designed for use
  * with Intel microprocessors. It has 24 I/O pins which may be individually
@@ -13,7 +15,6 @@ package fr.neatmonster.ibmpc;
  * handshaking.
  */
 public class Intel8255 {
-
     /**
      * Write output to the specified CPU port.
      *
@@ -43,5 +44,11 @@ public class Intel8255 {
      * @param val
      *            the value
      */
-    public void portOut(final int w, final int port, final int val) {}
+    public void portOut(final int w, final int port, final int val) {
+        switch (port) {
+        case 0x61:
+            if (val == 0x3) // BEEP
+                Toolkit.getDefaultToolkit().beep();
+        }
+    }
 }
