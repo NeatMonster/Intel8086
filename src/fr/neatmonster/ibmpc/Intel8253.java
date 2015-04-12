@@ -39,25 +39,46 @@ public class Intel8253 {
      *
      * @see fr.neatmonster.ibmpc.Intel8259
      */
-    private final Intel8259    pic;
+    private final Intel8259 pic;
 
     /** The actual value of each counter. */
-    private volatile int[]     count   = new int[3];
+    private final int[]     count   = new int[3];
     /** The initial value of each counter. */
-    private volatile int[]     value   = new int[3];
+    private final int[]     value   = new int[3];
     /** The latched value of each counter. */
-    private volatile int[]     latch   = new int[3];
+    private final int[]     latch   = new int[3];
     /** The control word of each counter. */
-    private volatile int[]     control = new int[3];
+    private final int[]     control = new int[3];
     /** Is each counter enabled? */
-    private volatile boolean[] enabled = new boolean[3];
+    private final boolean[] enabled = new boolean[3];
     /** Is each counter latched? */
-    private volatile boolean[] latched = new boolean[3];
+    private final boolean[] latched = new boolean[3];
+    /** The state of each counter's output. */
+    private final boolean[] output  = new boolean[3];
     /** The toggle for lsb, then msb reading. */
-    private volatile boolean[] toggle  = new boolean[3];
+    private final boolean[] toggle  = new boolean[3];
 
     public Intel8253(final Intel8259 pic) {
         this.pic = pic;
+    }
+
+    /**
+     * Sets the output state.
+     *
+     * @param sc
+     *            the timer
+     * @param high
+     *            the output state
+     */
+    private void output(final int sc, final boolean state) {
+        if (!output[sc] && state) {
+            switch (sc) {
+            case 0: // TIMER 0
+                pic.callIRQ(0);
+                break;
+            }
+        }
+        output[sc] = state;
     }
 
     /**
@@ -119,6 +140,7 @@ public class Intel8253 {
         case 0b01:
         case 0b10: {
             // Counter loading.
+            final int m = control[sc] >>> 1 & 0b111;
             final int rl = control[sc] >>> 4 & 0b11;
             switch (rl) {
             case 0b01: // Load least significant byte only.
@@ -140,6 +162,7 @@ public class Intel8253 {
             if (rl < 0b11 || !toggle[sc]) {
                 count[sc] = value[sc];
                 enabled[sc] = true;
+                output[sc] = m == 0b10 || m == 0b11;
             }
             break;
         }
@@ -176,9 +199,10 @@ public class Intel8253 {
                      * is loaded. The counter continues to decrement after
                      * terminal count has been reached.
                      */
+                    // Decrement count.
                     count[sc] = --count[sc] & 0xffff;
                     if (count[sc] == 0)
-                        pic.callIRQ(0);
+                        output(sc, true);
                     break;
                 case 0b10:
                     /*
@@ -200,9 +224,54 @@ public class Intel8253 {
                      * after the count register is loaded. The output can also
                      * be synchronized by software.
                      */
+                    // Decrement count.
                     count[sc] = --count[sc] & 0xffff;
-                    if (count[sc] == 1)
+
+                    // Reload count if necessary.
+                    if (count[sc] == 1) {
                         count[sc] = value[sc];
+                        output(sc, false);
+                    } else
+                        output(sc, true);
+                    break;
+                case 0b11:
+                    /*
+                     * Mode 3: Square Wave Rate Generator
+                     *
+                     * Similar to Mode 2 except that the output will remain high
+                     * until one half of the count has been completed (or even
+                     * numbers) and go low for the other half of the count. This
+                     * is accomplished by decrementing the counter by two on the
+                     * falling edge of each clock pulse. When the counter
+                     * reaches terminal count, the state of the output is
+                     * changed and the counter is reloaded with the full count
+                     * and the whole process is repeated.
+                     *
+                     * If the count is odd and the output is high, the first
+                     * clock pulse (after the count is loaded) decrements the
+                     * count by 1. Subsequent clock pulses decrement the clock
+                     * by 2. After timeout, the output goes low and the full
+                     * count is reloaded. The first clock pulse (following) the
+                     * reload decrements the counter by 3. Subsequent clock
+                     * pulses decrements the count by 2 until timeout. Then the
+                     * while process is repeated. In this way, if the count is
+                     * odd, the output will be high for (N + 1)/2 counts and low
+                     * for (N - 1)/2 counts.
+                     */
+                    // Decrement count.
+                    if ((count[sc] & 0b1) == 0b1) {
+                        if (output[sc])
+                            count[sc] = count[sc] - 1 & 0xffff;
+                        else
+                            count[sc] = count[sc] - 3 & 0xffff;
+                    } else
+                        count[sc] = count[sc] - 2 & 0xffff;
+
+                    // Reload count if necessary.
+                    if (count[sc] == 0) {
+                        count[sc] = value[sc];
+                        output(sc, !output[sc]);
+                    }
                     break;
                 }
     }

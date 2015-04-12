@@ -592,11 +592,18 @@ public class Intel8086 {
      * should not use these areas for any other purpose. Doing so may make
      * these systems incompatible with future Intel products.
      */
-    private final int[]        memory = new int[0x100000];
+    protected final int[]      memory = new int[0x100000];
 
     /*
      * External Components
      */
+    /**
+     * IBMCGA - Color Graphics Adapter
+     *
+     * @see fr.neatmonster.ibmpc.IBMCGA
+     */
+    public final IBMCGA        cga    = new IBMCGA(this);
+
     /**
      * Intel 8259 - Programmable Interrupt Controller
      *
@@ -609,7 +616,7 @@ public class Intel8086 {
      *
      * @see fr.neatmonster.ibmpc.Intel8255
      */
-    public final Intel8255     ppi    = new Intel8255();
+    public final Intel8255     ppi    = new Intel8255(pic);
 
     /**
      * Intel 8253 - Programmable Interval Timer
@@ -624,6 +631,13 @@ public class Intel8086 {
      * @see fr.neatmonster.ibmpc.Intel8237
      */
     public final Intel8237     dma    = new Intel8237();
+
+    /**
+     * Motorola 6845 - Cathode Ray Tube Controller
+     *
+     * @see fr.neatmonster.ibmpc.Motorola6845
+     */
+    public final Motorola6845  crtc   = new Motorola6845();
 
     /*
      * Typical 8086 Machine Instruction Format
@@ -1190,6 +1204,9 @@ public class Intel8086 {
         // Intel 8259
         if (port == 0x20 || port == 0x21)
             return pic.portIn(w, port);
+        // Motorola 6845
+        if (port >= 0x3d0 && port < 0x3e0)
+            return crtc.portIn(w, port);
         return 0;
     }
 
@@ -1216,6 +1233,9 @@ public class Intel8086 {
         // Intel 8259
         if (port == 0x20 || port == 0x21)
             pic.portOut(w, port, val);
+        // Motorola 6845
+        if (port >= 0x3d0 && port < 0x3e0)
+            crtc.portOut(w, port, val);
     }
 
     /**
@@ -1496,6 +1516,7 @@ public class Intel8086 {
             clocks += 61;
         }
 
+        os = ds;
         int rep = 0;
         prefixes: while (true) {
             // Segment prefix check.
@@ -1526,7 +1547,6 @@ public class Intel8086 {
                 clocks += 9;
                 break;
             default:
-                os = ds;
                 --ip;
                 break prefixes;
             }

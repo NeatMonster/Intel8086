@@ -18,7 +18,7 @@ public class Intel8259 {
      * 8-bit register which contains the interrupt request lines which are
      * masked.
      */
-    private volatile int   imr;
+    private int         imr;
 
     /**
      * Interrupt Request Register (IRR)
@@ -27,7 +27,7 @@ public class Intel8259 {
      * acknowledged. The highest request level is reset from the IRR when an
      * interrupt is acknowledged (not affected by IMR).
      */
-    private volatile int   irr;
+    private int         irr;
 
     /**
      * In-Service Register (ISR)
@@ -35,7 +35,7 @@ public class Intel8259 {
      * 8-bit register which contains the priority levels that are being
      * serviced. The ISR is updated when an End of Interrupt Command is issued.
      */
-    private volatile int   isr;
+    private int         isr;
 
     /**
      * Initialization Command Words (ICWS)
@@ -53,9 +53,9 @@ public class Intel8259 {
      * (e) Special Mask Mode is cleared and Status Read is set to IRR.
      * (f) If IC4 = 0, then all functions selected in ICW4 are set to zero.
      */
-    private volatile int[] icw     = new int[4];
+    private final int[] icw     = new int[4];
     /** Keeps track of initialization progress. */
-    private volatile int   icwStep = 0;
+    private int         icwStep = 0;
 
     /**
      * Call an interruption request on the specified line.
@@ -87,7 +87,7 @@ public class Intel8259 {
             if ((bits >>> i & 0b1) > 0) {
                 irr ^= 1 << i;
                 isr |= 1 << i;
-                return icw[2] + i;
+                return icw[1] + i;
             }
         }
         return 0;
@@ -129,6 +129,10 @@ public class Intel8259 {
                 imr = 0;
                 icw[icwStep++] = val;
             }
+            if ((val & 0x20) > 0) // EOI
+                for (int i = 0; i < 8; ++i)
+                    if ((isr >>> i & 0b1) > 0)
+                        isr ^= 1 << i;
             break;
         case 0x21:
             if (icwStep == 1) {

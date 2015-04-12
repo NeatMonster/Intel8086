@@ -1,7 +1,5 @@
 package fr.neatmonster.ibmpc;
 
-import java.awt.Toolkit;
-
 /**
  * The Intel 8255 is a general purpose programmable I/O device designed for use
  * with Intel microprocessors. It has 24 I/O pins which may be individually
@@ -16,6 +14,26 @@ import java.awt.Toolkit;
  */
 public class Intel8255 {
     /**
+     * Intel 8259 - Programmable Interrupt Controller
+     *
+     * @see fr.neatmonster.ibmpc.Intel8259
+     */
+    private final Intel8259 pic;
+
+    /** Completion code from keyboard. */
+    private int             keycode = -1;
+
+    /**
+     * Instantiate a new Intel 8255.
+     *
+     * @param pic
+     *            the pic
+     */
+    public Intel8255(final Intel8259 pic) {
+        this.pic = pic;
+    }
+
+    /**
      * Write output to the specified CPU port.
      *
      * @param w
@@ -25,11 +43,16 @@ public class Intel8255 {
      * @return the value
      */
     public int portIn(final int w, final int port) {
+        if (port == 0x60 && keycode > 0) {
+            // Keyboard reset
+            final int code = keycode;
+            keycode = -1;
+            return code;
+        }
         switch (port) {
-        case 0x60:
-            return 0xc; // 64K of RAM
-        case 0x62:
-            return 0x0; // No I/O Channel RAM
+        case 0x60: // PORT A
+            // No B/W | No I/O RAM
+            return 0x20 | 0xc;
         }
         return 0;
     }
@@ -46,9 +69,13 @@ public class Intel8255 {
      */
     public void portOut(final int w, final int port, final int val) {
         switch (port) {
-        case 0x61:
-            if (val == 0x3) // BEEP
-                Toolkit.getDefaultToolkit().beep();
+        case 0x61: // PORT B
+            if (val == 0x4c) {
+                // Keyboard reset
+                keycode = 0xaa;
+                pic.callIRQ(1);
+            }
+            break;
         }
     }
 }
