@@ -14,8 +14,23 @@ package fr.neatmonster.ibmpc;
  * Addressing.
  */
 public class Motorola6845 {
+    /** The index of the register to access. */
+    private int         index;
+    /** The registers accessed by the CPU. */
+    private final int[] registers = new int[0x10];
     /** Vertical/horizontal retracing. */
-    private int retrace = 0;
+    private int         retrace;
+
+    /**
+     * Returns the value of the register with the specified index.
+     *
+     * @param index
+     *            the index
+     * @return the value
+     */
+    public int getRegister(final int index) {
+        return registers[index];
+    }
 
     /**
      * Write output to the specified CPU port.
@@ -55,5 +70,14 @@ public class Motorola6845 {
      * @param val
      *            the value
      */
-    public void portOut(final int w, final int port, final int val) {}
+    public void portOut(final int w, final int port, final int val) {
+        switch (port) {
+        case 0x3d4: // Index
+            index = val;
+            break;
+        case 0x3d5: // Register
+            registers[index] = val;
+            break;
+        }
+    }
 }

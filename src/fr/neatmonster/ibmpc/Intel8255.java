@@ -19,9 +19,10 @@ public class Intel8255 {
      * @see fr.neatmonster.ibmpc.Intel8259
      */
     private final Intel8259 pic;
-
-    /** Completion code from keyboard. */
-    private int             keycode = -1;
+    /**
+     * 4 ports of the PIC (A, B, C and Control) as registers.
+     */
+    private final int[]     ports = new int[4];
 
     /**
      * Instantiate a new Intel 8255.
@@ -31,6 +32,18 @@ public class Intel8255 {
      */
     public Intel8255(final Intel8259 pic) {
         this.pic = pic;
+        ports[0] = 0x2c;
+    }
+
+    /**
+     * Calls a keyboard interrupt for the specified scan code.
+     *
+     * @param scanCode
+     *            the scan code
+     */
+    public void keyTyped(final int scanCode) {
+        ports[0] = scanCode;
+        pic.callIRQ(1);
     }
 
     /**
@@ -43,18 +56,7 @@ public class Intel8255 {
      * @return the value
      */
     public int portIn(final int w, final int port) {
-        if (port == 0x60 && keycode > 0) {
-            // Keyboard reset
-            final int code = keycode;
-            keycode = -1;
-            return code;
-        }
-        switch (port) {
-        case 0x60: // PORT A
-            // No B/W | No I/O RAM
-            return 0x20 | 0xc;
-        }
-        return 0;
+        return ports[port & 0b11];
     }
 
     /**
@@ -68,14 +70,6 @@ public class Intel8255 {
      *            the value
      */
     public void portOut(final int w, final int port, final int val) {
-        switch (port) {
-        case 0x61: // PORT B
-            if (val == 0x4c) {
-                // Keyboard reset
-                keycode = 0xaa;
-                pic.callIRQ(1);
-            }
-            break;
-        }
+        ports[port & 0b11] = val;
     }
 }

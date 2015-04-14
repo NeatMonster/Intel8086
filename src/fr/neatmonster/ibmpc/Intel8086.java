@@ -55,8 +55,10 @@ public class Intel8086 {
         // Reset the CPU.
         cpu.reset();
         try {
-            // Try loading the bios.
+            // Try loading IBM ROM BIOS.
             cpu.load(0xfe000, "bios.bin");
+            // Try loading IBM ROM BASIC.
+            cpu.load(0xf6000, "basic.bin");
             // Execute all instructions.
             cpu.run();
         } catch (final IOException e) {
@@ -598,13 +600,6 @@ public class Intel8086 {
      * External Components
      */
     /**
-     * IBMCGA - Color Graphics Adapter
-     *
-     * @see fr.neatmonster.ibmpc.IBMCGA
-     */
-    public final IBMCGA        cga    = new IBMCGA(this);
-
-    /**
      * Intel 8259 - Programmable Interrupt Controller
      *
      * @see fr.neatmonster.ibmpc.Intel8259
@@ -638,6 +633,13 @@ public class Intel8086 {
      * @see fr.neatmonster.ibmpc.Motorola6845
      */
     public final Motorola6845  crtc   = new Motorola6845();
+
+    /**
+     * IBMCGA - Color Graphics Adapter
+     *
+     * @see fr.neatmonster.ibmpc.IBMCGA
+     */
+    public final IBMCGA        cga    = new IBMCGA(this, ppi, crtc);
 
     /*
      * Typical 8086 Machine Instruction Format
@@ -754,13 +756,13 @@ public class Intel8086 {
 
         if (mod == 0b01)
             // 8-bit displacement follows
-            ip += 2;
+            ip = ip + 2 & 0xffff;
         else if (mod == 0b00 && rm == 0b110 || mod == 0b10)
             // 16-bit displacement follows
-            ip += 3;
+            ip = ip + 3 & 0xffff;
         else
             // No displacement
-            ip += 1;
+            ip = ip + 1 & 0xffff;
     }
 
     /**
@@ -773,7 +775,7 @@ public class Intel8086 {
      * @return the value
      */
     private int getAddr(final int seg, final int off) {
-        return seg << 4 | off;
+        return (seg << 4) + off;
     }
 
     /**
@@ -965,7 +967,7 @@ public class Intel8086 {
             ea = bh << 8 | bl + disp;
             break;
         }
-        return os << 4 | ea & 0xffff;
+        return (os << 4) + (ea & 0xffff);
     }
 
     /**
@@ -991,7 +993,7 @@ public class Intel8086 {
         int val = memory[addr];
         if (w == W)
             val |= memory[addr + 1] << 8;
-        ip += 1 + w;
+        ip = ip + 1 + w & 0xffff;
         return val;
     }
 
@@ -1178,7 +1180,7 @@ public class Intel8086 {
      */
     private int pop() {
         final int val = getMem(W, getAddr(ss, sp));
-        sp += 2;
+        sp = sp + 2 & 0xffff;
         return val;
     }
 
@@ -1245,7 +1247,7 @@ public class Intel8086 {
      *            the value
      */
     private void push(final int val) {
-        sp -= 2;
+        sp = sp - 2 & 0xffff;
         setMem(W, getAddr(ss, sp), val);
     }
 
@@ -1334,6 +1336,9 @@ public class Intel8086 {
      *            the new value
      */
     private void setMem(final int w, final int addr, final int val) {
+        // IBM BIOS and BASIC are ROM.
+        if (addr >= 0xf6000)
+            return;
         memory[addr] = val & 0xff;
         if (w == W) {
             if ((addr & 0b1) == 0b1)
@@ -1547,7 +1552,7 @@ public class Intel8086 {
                 clocks += 9;
                 break;
             default:
-                --ip;
+                ip = ip - 1 & 0xffff;
                 break prefixes;
             }
         }
@@ -1560,7 +1565,7 @@ public class Intel8086 {
         op = queue[0];
         d  = op >>> 1 & 0b1;
         w  = op       & 0b1;
-        ++ip; // Increment IP.
+        ip = ip + 1 & 0xffff; // Increment IP.
 
         // Only repeat string instructions.
         switch (op) {
@@ -3261,7 +3266,7 @@ public class Intel8086 {
                 dst = getMem(W);
                 dst = signconv(W, dst);
                 push(ip);
-                ip += dst;
+                ip = ip + dst & 0xffff;
                 clocks += 19;
                 break;
 
@@ -3360,7 +3365,7 @@ public class Intel8086 {
             case 0xe9: // JMP NEAR-LABEL
                 dst = getMem(W);
                 dst = signconv(W, dst);
-                ip += dst;
+                ip = ip + dst & 0xffff;
                 clocks += 15;
                 break;
 
@@ -3368,7 +3373,7 @@ public class Intel8086 {
             case 0xeb: // JMP SHORT-LABEL
                 dst = getMem(B);
                 dst = signconv(B, dst);
-                ip += dst;
+                ip = ip + dst & 0xffff;
                 clocks += 15;
                 break;
 
@@ -3408,7 +3413,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (getFlag(OF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3423,7 +3428,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (!getFlag(OF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3438,7 +3443,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (getFlag(CF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3453,7 +3458,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (!getFlag(CF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3468,7 +3473,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (getFlag(ZF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3483,7 +3488,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (!getFlag(ZF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3498,7 +3503,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (getFlag(CF) | getFlag(ZF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3513,7 +3518,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (!(getFlag(CF) | getFlag(ZF))) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3528,7 +3533,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (getFlag(SF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3543,7 +3548,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (!getFlag(SF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3558,7 +3563,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (getFlag(PF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3573,7 +3578,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (!getFlag(PF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3588,7 +3593,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (getFlag(SF) ^ getFlag(OF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3603,7 +3608,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (!(getFlag(SF) ^ getFlag(OF))) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3618,7 +3623,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (getFlag(SF) ^ getFlag(OF) | getFlag(ZF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3633,7 +3638,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (!(getFlag(SF) ^ getFlag(OF) | getFlag(ZF))) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 16;
                 } else
                     clocks += 4;
@@ -3662,7 +3667,7 @@ public class Intel8086 {
                 src = getReg(W, CX) - 1 & 0xffff;
                 setReg(W, CX, src);
                 if (src != 0) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 17;
                 } else
                     clocks += 5;
@@ -3683,7 +3688,7 @@ public class Intel8086 {
                 src = getReg(W, CX) - 1 & 0xffff;
                 setReg(W, CX, src);
                 if (src != 0 && getFlag(ZF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 18;
                 } else
                     clocks += 6;
@@ -3704,7 +3709,7 @@ public class Intel8086 {
                 src = getReg(W, CX) - 1 & 0xffff;
                 setReg(W, CX, src);
                 if (src != 0 && !getFlag(ZF)) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 19;
                 } else
                     clocks += 5;
@@ -3722,7 +3727,7 @@ public class Intel8086 {
                 dst = getMem(B);
                 dst = signconv(B, dst);
                 if (getReg(W, CX) == 0) {
-                    ip += dst;
+                    ip = ip + dst & 0xffff;
                     clocks += 18;
                 } else
                     clocks += 6;
@@ -4367,7 +4372,7 @@ public class Intel8086 {
                         // Do sign conversion manually.
                         ldst = ldst << 32 >> 32;
                         long lres = ldst / src & 0xffffffff;
-                        if (lres > 0x00007fff | lres < 0xffff8000)
+                        if (lres > 0x00007fff || lres < 0xffff8000)
                             callInt(0);
                         else {
                             setReg(W, AX, (int) lres);
