@@ -88,7 +88,10 @@ import javax.swing.JPanel;
  * is highly programmable with respect to raster and character parameters.
  * Therefore, many additional modes are possible with programming of the
  * adapter.
+ *
+ * @author Alexandre ADAMSKI <alexandre.adamski@etu.enseeiht.fr>
  */
+@SuppressWarnings("serial")
 public class IBMCGA extends JPanel implements KeyListener {
     /**
      * Lookup table for conversions from CP437 to Unicode code points.
@@ -420,8 +423,8 @@ public class IBMCGA extends JPanel implements KeyListener {
     @Override
     protected void paintComponent(final Graphics g) {
         super.paintComponent(g);
-        final int curAttr  = crtc.getRegister(0xa) >> 4;
-        final int curLoc   = crtc.getRegister(0xf) | crtc.getRegister(0xe) << 8;
+        final int curAttr = crtc.getRegister(0xa) >> 4;
+        final int curLoc = crtc.getRegister(0xf) | crtc.getRegister(0xe) << 8;
         for (int y = 0; y < 25; ++y)
             for (int x = 0; x < 80; ++x) {
                 final int character = cpu.memory[0xb8000 + 2 * (x + y * 80)];

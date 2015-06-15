@@ -18,8 +18,10 @@ package fr.neatmonster.ibmpc;
  * Autoinitialize to its original condition following and End of Process (/EOP).
  *
  * Each channel has a full 64K address and word count capability.
+ *
+ * @author Alexandre ADAMSKI <alexandre.adamski@etu.enseeiht.fr>
  */
-public class Intel8237 {
+public class Intel8237 implements Peripheral {
     /*
      * Each channel has a pair of Base Address and Base Word Count registers.
      * These 16-bit registers store the original value of their associated
@@ -37,6 +39,18 @@ public class Intel8237 {
     private final boolean[] flipflop = new boolean[4];
 
     /**
+     * Returns if a peripheral is connected to the specified port.
+     *
+     * @param port
+     *            the port
+     * @return true if connected, false else
+     */
+    @Override
+    public boolean isConnected(final int port) {
+        return port >= 0x00 && port < 0x20;
+    }
+
+    /**
      * Write output to the specified CPU port.
      *
      * @param w
@@ -45,6 +59,7 @@ public class Intel8237 {
      *            the port
      * @return the value
      */
+    @Override
     public int portIn(final int w, final int port) {
         int chan;
         switch (port) {
@@ -86,6 +101,7 @@ public class Intel8237 {
      * @param val
      *            the value
      */
+    @Override
     public void portOut(final int w, final int port, final int val) {
         int chan;
         switch (port) {

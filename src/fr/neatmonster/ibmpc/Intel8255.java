@@ -11,8 +11,10 @@ package fr.neatmonster.ibmpc;
  * operation (MODE 2) is a bidirectional bus mode which uses 8 lines for a
  * bidirectional bus, and 5 lines, borrowing one from the other group, for
  * handshaking.
+ *
+ * @author Alexandre ADAMSKI <alexandre.adamski@etu.enseeiht.fr>
  */
-public class Intel8255 {
+public class Intel8255 implements Peripheral {
     /**
      * Intel 8259 - Programmable Interrupt Controller
      *
@@ -36,6 +38,18 @@ public class Intel8255 {
     }
 
     /**
+     * Returns if a peripheral is connected to the specified port.
+     *
+     * @param port
+     *            the port
+     * @return true if connected, false else
+     */
+    @Override
+    public boolean isConnected(final int port) {
+        return port >= 0x60 && port < 0x64;
+    }
+
+    /**
      * Calls a keyboard interrupt for the specified scan code.
      *
      * @param scanCode
@@ -55,6 +69,7 @@ public class Intel8255 {
      *            the port
      * @return the value
      */
+    @Override
     public int portIn(final int w, final int port) {
         return ports[port & 0b11];
     }
@@ -69,6 +84,7 @@ public class Intel8255 {
      * @param val
      *            the value
      */
+    @Override
     public void portOut(final int w, final int port, final int val) {
         ports[port & 0b11] = val;
     }

@@ -10,8 +10,10 @@ package fr.neatmonster.ibmpc;
  * The 8259 is designed to minimize software and real time overhead in handling
  * multi-level priority interrupts. It has several modes, permitting
  * optimization for a variety of system requirements.
+ *
+ * @author Alexandre ADAMSKI <alexandre.adamski@etu.enseeiht.fr>
  */
-public class Intel8259 {
+public class Intel8259 implements Peripheral {
     /**
      * Interrupt Mask Register (IMR)
      *
@@ -77,6 +79,18 @@ public class Intel8259 {
     }
 
     /**
+     * Returns if a peripheral is connected to the specified port.
+     *
+     * @param port
+     *            the port
+     * @return true if connected, false else
+     */
+    @Override
+    public boolean isConnected(final int port) {
+        return port == 0x20 || port == 0x21;
+    }
+
+    /**
      * Returns the type of the interrupt request waiting to be serviced.
      *
      * @return the interrupt-type
@@ -102,6 +116,7 @@ public class Intel8259 {
      *            the port
      * @return the value
      */
+    @Override
     public int portIn(final int w, final int port) {
         switch (port) {
         case 0x20:
@@ -122,6 +137,7 @@ public class Intel8259 {
      * @param val
      *            the value
      */
+    @Override
     public void portOut(final int w, final int port, final int val) {
         switch (port) {
         case 0x20:

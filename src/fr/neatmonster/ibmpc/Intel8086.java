@@ -44,68 +44,10 @@ import java.nio.file.Paths;
  * single bus cycle. If the EU issues a request for bus access while the BIU is
  * in the process of an instruction fetch bus cycle, the BIU completes the
  * cycle before honoring the EU's request.
+ *
+ * @author Alexandre ADAMSKI <alexandre.adamski@etu.enseeiht.fr>
  */
 public class Intel8086 {
-    /**
-     * Entry point. For now it executes a little test program.
-     */
-    public static void main(final String[] args) {
-        // Instantiate a new CPU.
-        final Intel8086 cpu = new Intel8086();
-        // Reset the CPU.
-        cpu.reset();
-        try {
-            // Try loading IBM ROM BIOS.
-            cpu.load(0xfe000, "bios.bin");
-            // Try loading IBM ROM BASIC.
-            cpu.load(0xf6000, "basic.bin");
-            // Execute all instructions.
-            cpu.run();
-        } catch (final IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-    /**
-     * Returns if the most significant byte of a value is set.
-     *
-     * @param w
-     *            word/byte operation
-     * @param x
-     *            the value
-     * @return true if MSB is set, false if it is cleared
-     */
-    private static boolean msb(final int w, final int x) {
-        return (x & SIGN[w]) == SIGN[w];
-    }
-
-    /**
-     * Shifts left a value by a given number of positions, or right if that
-     * number is negative.
-     *
-     * @param x
-     *            the value
-     * @param n
-     *            the number of positions
-     * @return the new value
-     */
-    private static int shift(final int x, final int n) {
-        return n >= 0 ? x << n : x >>> -n;
-    }
-
-    /**
-     * Converts an unsigned value to a signed value.
-     *
-     * @param w
-     *            word/byte operation
-     * @param x
-     *            the value
-     * @return the new value
-     */
-    private static int signconv(final int w, final int x) {
-        return x << 32 - BITS[w] >> 32 - BITS[w];
-    }
-
     /**
      * CF (carry flag)
      *
@@ -245,6 +187,66 @@ public class Intel8086 {
     private static final int[] BITS   = new int[] { 8, 16 };
     /** Lookup table used for setting the overflow flag. */
     private static final int[] SIGN   = new int[] { 0x80, 0x8000 };
+
+    /**
+     * Entry point. For now it executes a little test program.
+     */
+    public static void main(final String[] args) {
+        // Instantiate a new CPU.
+        final Intel8086 cpu = new Intel8086();
+        // Reset the CPU.
+        cpu.reset();
+        try {
+            // Try loading IBM ROM BIOS.
+            cpu.load(0xfe000, "bios.bin");
+            // Try loading IBM ROM BASIC.
+            cpu.load(0xf6000, "basic.bin");
+            // Execute all instructions.
+            cpu.run();
+        } catch (final IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Returns if the most significant byte of a value is set.
+     *
+     * @param w
+     *            word/byte operation
+     * @param x
+     *            the value
+     * @return true if MSB is set, false if it is cleared
+     */
+    private static boolean msb(final int w, final int x) {
+        return (x & SIGN[w]) == SIGN[w];
+    }
+
+    /**
+     * Shifts left a value by a given number of positions, or right if that
+     * number is negative.
+     *
+     * @param x
+     *            the value
+     * @param n
+     *            the number of positions
+     * @return the new value
+     */
+    private static int shift(final int x, final int n) {
+        return n >= 0 ? x << n : x >>> -n;
+    }
+
+    /**
+     * Converts an unsigned value to a signed value.
+     *
+     * @param w
+     *            word/byte operation
+     * @param x
+     *            the value
+     * @return the new value
+     */
+    private static int signconv(final int w, final int x) {
+        return x << 32 - BITS[w] >> 32 - BITS[w];
+    }
 
     /*
      * General Registers
@@ -469,7 +471,7 @@ public class Intel8086 {
      * fetch already in progress is completed before executing the EU's bus
      * request).
      */
-    private final int[]        queue  = new int[6];
+    private final int[]        queue       = new int[6];
 
     /**
      * Memory
@@ -594,52 +596,61 @@ public class Intel8086 {
      * should not use these areas for any other purpose. Doing so may make
      * these systems incompatible with future Intel products.
      */
-    protected final int[]      memory = new int[0x100000];
+    protected final int[]      memory      = new int[0x100000];
 
     /*
      * External Components
      */
     /**
+     * Intel 8237 - Direct Memory Access Controller
+     *
+     * @see fr.neatmonster.ibmpc.Intel8237
+     */
+    private final Intel8237    dma         = new Intel8237();
+
+    /**
      * Intel 8259 - Programmable Interrupt Controller
      *
      * @see fr.neatmonster.ibmpc.Intel8259
      */
-    public final Intel8259     pic    = new Intel8259();
-
-    /**
-     * Intel 8255 - Programmable Peripheral Interface
-     *
-     * @see fr.neatmonster.ibmpc.Intel8255
-     */
-    public final Intel8255     ppi    = new Intel8255(pic);
+    private final Intel8259    pic         = new Intel8259();
 
     /**
      * Intel 8253 - Programmable Interval Timer
      *
      * @see fr.neatmonster.ibmpc.Intel8253
      */
-    public final Intel8253     pit    = new Intel8253(pic);
+    private final Intel8253    pit         = new Intel8253(pic);
 
     /**
-     * Intel 8237 - Direct Memory Access Controller
+     * Intel 8255 - Programmable Peripheral Interface
      *
-     * @see fr.neatmonster.ibmpc.Intel8237
+     * @see fr.neatmonster.ibmpc.Intel8255
      */
-    public final Intel8237     dma    = new Intel8237();
+    private final Intel8255    ppi         = new Intel8255(pic);
 
     /**
      * Motorola 6845 - Cathode Ray Tube Controller
      *
      * @see fr.neatmonster.ibmpc.Motorola6845
      */
-    public final Motorola6845  crtc   = new Motorola6845();
+    private final Motorola6845 crtc        = new Motorola6845();
 
     /**
      * IBMCGA - Color Graphics Adapter
      *
      * @see fr.neatmonster.ibmpc.IBMCGA
      */
-    public final IBMCGA        cga    = new IBMCGA(this, ppi, crtc);
+    @SuppressWarnings("unused")
+    private final IBMCGA       cga         = new IBMCGA(this, ppi, crtc);
+
+    /**
+     * An array containing all peripherals.
+     *
+     * The CGA, technically a peripheral, interacts directly with the CPU in
+     * this implementation and by doing so does not use the I/O space.
+     */
+    private final Peripheral[] peripherals = new Peripheral[] { dma, pic, pit, ppi, crtc };
 
     /*
      * Typical 8086 Machine Instruction Format
@@ -718,6 +729,43 @@ public class Intel8086 {
      *            the interrupt-type
      */
     private void callInt(final int type) {
+        // MS-DOS 1.25 loading, disabled for now.
+        /*switch (type) {
+        case 0x13: // Diskette I/O
+            switch (ah) {
+            case 0: // Reset diskette system
+                ah = 0;
+                setFlag(CF, false);
+                break;
+            case 2: // Read the desired sectors into memory
+                // A = (c ⋅ Nheads + h) ⋅ Nsectors + (s − 1),
+                final int HEADS = 1;
+                final int SECTORS = 8;
+                final int cx = ch << 8 | cl;
+                final int c = (cx & 0xff00) >>> 8 | (cx & 0xc0) << 2;
+                final int h = dh;
+                final int s = cx & 63;
+                final int a = (c * HEADS + h) * SECTORS + s - 1;
+                final int srcAddr = a * 512;
+                final int dstAddr = (es << 4) + (bh << 8 | bl);
+                final int length = al * 512;
+                try {
+                    final RandomAccessFile raf = new RandomAccessFile(new File("dos.bin"), "r");
+                    raf.seek(srcAddr);
+                    for (int addr = dstAddr; addr < dstAddr + length; ++addr)
+                        memory[addr] = raf.read() & 0xff;
+                    raf.close();
+                    ah = 0;
+                    setFlag(CF, false);
+                } catch (final Exception e) {
+                    ah = 0x40; // BAD SEEK
+                    setFlag(CF, true);
+                    e.printStackTrace();
+                }
+                break;
+            }
+            return;
+        }*/
         push(flags);
         setFlag(IF, false);
         setFlag(TF, false);
@@ -1194,21 +1242,9 @@ public class Intel8086 {
      * @return the value
      */
     private int portIn(final int w, final int port) {
-        // Intel 8237
-        if (port >= 0x00 && port < 0x20)
-            return dma.portIn(w, port);
-        // Intel 8253
-        if (port >= 0x40 && port < 0x44)
-            return pit.portIn(w, port);
-        // Intel 8255
-        if (port >= 0x60 && port < 0x64)
-            return ppi.portIn(w, port);
-        // Intel 8259
-        if (port == 0x20 || port == 0x21)
-            return pic.portIn(w, port);
-        // Motorola 6845
-        if (port >= 0x3d0 && port < 0x3e0)
-            return crtc.portIn(w, port);
+        for (final Peripheral peripheral : peripherals)
+            if (peripheral.isConnected(port))
+                return peripheral.portIn(w, port);
         return 0;
     }
 
@@ -1223,21 +1259,11 @@ public class Intel8086 {
      *            the value
      */
     private void portOut(final int w, final int port, final int val) {
-        // Intel 8237
-        if (port >= 0x00 && port < 0x20)
-            dma.portOut(w, port, val);
-        // Intel 8253
-        if (port >= 0x40 && port < 0x44)
-            pit.portOut(w, port, val);
-        // Intel 8255
-        if (port >= 0x60 && port < 0x64)
-            ppi.portOut(w, port, val);
-        // Intel 8259
-        if (port == 0x20 || port == 0x21)
-            pic.portOut(w, port, val);
-        // Motorola 6845
-        if (port >= 0x3d0 && port < 0x3e0)
-            crtc.portOut(w, port, val);
+        for (final Peripheral peripheral : peripherals)
+            if (peripheral.isConnected(port)) {
+                peripheral.portOut(w, port, val);
+                return;
+            }
     }
 
     /**

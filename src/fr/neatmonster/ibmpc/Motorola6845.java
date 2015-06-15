@@ -12,8 +12,10 @@ package fr.neatmonster.ibmpc;
  * keyboard functions, R/W, cursor movements, and editing are under processor
  * control; whereas the CRTC provides video timing and Refresh Memory
  * Addressing.
+ *
+ * @author Alexandre ADAMSKI <alexandre.adamski@etu.enseeiht.fr>
  */
-public class Motorola6845 {
+public class Motorola6845 implements Peripheral {
     /** The index of the register to access. */
     private int         index;
     /** The registers accessed by the CPU. */
@@ -33,6 +35,18 @@ public class Motorola6845 {
     }
 
     /**
+     * Returns if a peripheral is connected to the specified port.
+     *
+     * @param port
+     *            the port
+     * @return true if connected, false else
+     */
+    @Override
+    public boolean isConnected(final int port) {
+        return port >= 0x3d0 && port < 0x3e0;
+    }
+
+    /**
      * Write output to the specified CPU port.
      *
      * @param w
@@ -41,6 +55,7 @@ public class Motorola6845 {
      *            the port
      * @return the value
      */
+    @Override
     public int portIn(final int w, final int port) {
         switch (port) {
         case 0x3da:
@@ -70,6 +85,7 @@ public class Motorola6845 {
      * @param val
      *            the value
      */
+    @Override
     public void portOut(final int w, final int port, final int val) {
         switch (port) {
         case 0x3d4: // Index

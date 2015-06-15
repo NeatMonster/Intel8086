@@ -32,8 +32,10 @@ package fr.neatmonster.ibmpc;
  * - Real Time CLock
  * - Digital One-Shot
  * - Complex Motor Controller
+ *
+ * @author Alexandre ADAMSKI <alexandre.adamski@etu.enseeiht.fr>
  */
-public class Intel8253 {
+public class Intel8253 implements Peripheral {
     /**
      * Intel 8259 - Programmable Interrupt Controller
      *
@@ -60,6 +62,18 @@ public class Intel8253 {
 
     public Intel8253(final Intel8259 pic) {
         this.pic = pic;
+    }
+
+    /**
+     * Returns if a peripheral is connected to the specified port.
+     *
+     * @param port
+     *            the port
+     * @return true if connected, false else
+     */
+    @Override
+    public boolean isConnected(final int port) {
+        return port >= 0x40 && port < 0x44;
     }
 
     /**
@@ -90,6 +104,7 @@ public class Intel8253 {
      *            the port
      * @return the value
      */
+    @Override
     public int portIn(final int w, final int port) {
         final int sc = port & 0b11;
         switch (sc) {
@@ -133,6 +148,7 @@ public class Intel8253 {
      * @param val
      *            the value
      */
+    @Override
     public void portOut(final int w, final int port, final int val) {
         int sc = port & 0b11;
         switch (sc) {
