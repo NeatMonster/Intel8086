@@ -1,8 +1,8 @@
 package fr.neatmonster.ibmpc;
 
+import java.io.DataInputStream;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.io.InputStream;
 
 /**
  * The 8086 CPU is characterized by:
@@ -1202,7 +1202,19 @@ public class Intel8086 {
      * @throws IOException
      */
     public void load(final int addr, final String path) throws IOException {
-        final byte[] bin = Files.readAllBytes(Paths.get(path));
+        final InputStream is = getClass().getClassLoader().getResourceAsStream(path);
+        final byte[] bin = new byte[is.available()];
+        DataInputStream dis = null;
+        try {
+            dis = new DataInputStream(is);
+            dis.readFully(bin);
+        } catch (final IOException e) {
+            e.printStackTrace();
+        } finally {
+            if (dis != null)
+                dis.close();
+            is.close();
+        }
         for (int i = 0; i < bin.length; i++)
             memory[addr + i] = bin[i] & 0xff;
     }

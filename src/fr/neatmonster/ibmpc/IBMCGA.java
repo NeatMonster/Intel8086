@@ -6,7 +6,6 @@ import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
-import java.io.File;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -180,7 +179,8 @@ public class IBMCGA extends JPanel implements KeyListener {
         setPreferredSize(new Dimension(560, 300));
         try {
             // Use CP437 TrueType font.
-            setFont(Font.createFont(Font.TRUETYPE_FONT, new File("cp437.ttf")).deriveFont(12f));
+            setFont(Font.createFont(Font.TRUETYPE_FONT, getClass()
+                    .getClassLoader().getResourceAsStream("cp437.ttf")).deriveFont(12f));
         } catch (final Exception e) {
             e.printStackTrace();
         }
